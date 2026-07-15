@@ -18,13 +18,13 @@ jobs:
           cmd /c Downloads.bat
 
       - name: Log In To AnyDesk
-        run: |
-  # Verifica se o arquivo start.bat existe antes de executar
-  if (Test-Path "start.bat") {
-    cmd /c start.bat
-  } else {
-    Write-Host "Arquivo start.bat não encontrado. Verifique a configuração."
-  }
+  run: |
+    # Verifica se o arquivo start.bat existe antes de executar
+    if (Test-Path "start.bat") {
+      cmd /c start.bat
+    } else {
+      Write-Host "Arquivo start.bat não encontrado. Verifique a configuração."
+    }
 
       - name: Monitor and Restart AnyDesk if Needed
         run: |
