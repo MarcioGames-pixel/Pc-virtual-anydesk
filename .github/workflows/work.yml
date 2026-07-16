@@ -16,19 +16,16 @@ jobs:
           Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat"
           # Executa o script .bat para instalar os componentes
           cmd /c Downloads.bat
-
+          
       - name: Fix AnyDesk path
         run: |
          if (Test-Path "start.bat") {
-         (Get-Content start.bat) `
-       -replace 'anydesk', 'C:\ProgramData\chocolatey\lib\anydesk.portable\tools\AnyDesk.exe' `
-       | Set-Content start.bat
-
-       Write-Host "start.bat corrigido:"
-       Get-Content start.bat
-       } else {
-       Write-Host "start.bat não encontrado."
-       }
+         (Get-Content start.bat) -replace 'anydesk', 'C:\ProgramData\chocolatey\lib\anydesk.portable\tools\AnyDesk.exe' | Set-Content start.bat
+         Write-Host "start.bat corrigido:"
+         Get-Content start.bat
+         } else {
+         Write-Host "start.bat não encontrado."
+         }
 
     
       - name: Log In To AnyDesk
