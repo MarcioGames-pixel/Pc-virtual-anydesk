@@ -5,22 +5,36 @@ on:
 
 jobs:
   vm:
+    name: Start Windows VM
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: Install Docker
+      - name: Prepare Docker
         run: |
           sudo apt update
-          sudo apt install -y docker.io docker-compose
 
-      - name: Download config
-        run: |
-          mkdir dockercomp
-          cd dockercomp
-          wget -O Win10VLqL.yml https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
+          sudo systemctl start docker || true
 
-      - name: Start Docker Windows VM
+          docker --version
+          docker compose version || docker-compose --version
+
+      - name: Download Windows VM config
+        run: |
+          mkdir -p dockercomp
+          cd dockercomp
+
+          wget -O Win10VLqL.yml \
+          https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
+
+          ls -la
+
+      - name: Start Windows VM
         run: |
           cd dockercomp
-          sudo docker-compose -f Win10VLqL.yml up
+
+          if command -v docker-compose; then
+            sudo docker-compose -f Win10VLqL.yml up
+          else
+            sudo docker compose -f Win10VLqL.yml up
+          fi
