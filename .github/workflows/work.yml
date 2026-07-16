@@ -7,7 +7,7 @@ jobs:
   build:
     name: Start Building...
     runs-on: windows-latest
-    timeout-minutes: 10080
+    timeout-minutes: 10080  # Máximo de 7 dias para evitar tempo de execução excessivo
 
     steps:
       - name: Downloading & Installing Essentials
@@ -16,18 +16,7 @@ jobs:
           Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat"
           # Executa o script .bat para instalar os componentes
           cmd /c Downloads.bat
-          
-      - name: Fix AnyDesk path
-        run: |
-         if (Test-Path "start.bat") {
-         (Get-Content start.bat) -replace 'anydesk', 'C:\ProgramData\chocolatey\lib\anydesk.portable\tools\AnyDesk.exe' | Set-Content start.bat
-         Write-Host "start.bat corrigido:"
-         Get-Content start.bat
-         } else {
-         Write-Host "start.bat não encontrado."
-         }
 
-    
       - name: Log In To AnyDesk
         run: |
           # Verifica se o arquivo start.bat existe antes de executar
@@ -37,18 +26,16 @@ jobs:
             Write-Host "Arquivo start.bat não encontrado. Verifique a configuração."
           }
 
-      - name: Monitor and Keep Running
+      - name: Monitor and Restart AnyDesk if Needed
         run: |
-          # Monitora a conexão do AnyDesk e mantém o ambiente ativo
+          # Monitora a conexão do AnyDesk e reinicia se necessário
           while ($true) {
             $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
             if (-not $process) {
               Write-Host "AnyDesk não está rodando, reiniciando..."
-              if (Test-Path "start.bat") {
-                cmd /c start.bat
-              }
+              cmd /c start.bat
             }
-            Start-Sleep -Seconds 300
+            Start-Sleep -Seconds 300  # Verifica a cada 5 minutos
           }
 
       - name: Time Counter (Long Running Task)
