@@ -1,0 +1,26 @@
+name: Windows VM Docker
+
+on:
+  workflow_dispatch:
+
+jobs:
+  vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Docker
+        run: |
+          sudo apt update
+          sudo apt install -y docker.io docker-compose
+
+      - name: Download config
+        run: |
+          mkdir dockercomp
+          cd dockercomp
+          wget -O Win10VLqL.yml https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
+
+      - name: Start Docker Windows VM
+        run: |
+          cd dockercomp
+          sudo docker-compose -f Win10VLqL.yml up
