@@ -17,6 +17,15 @@ jobs:
           # Executa o script .bat para instalar os componentes
           cmd /c Downloads.bat
 
+      - name: Fix AnyDesk path
+        run: |
+          if (Test-Path "start.bat") {
+            (Get-Content start.bat) -replace 'anydesk', '"C:\ProgramData\chocolatey\lib\anydesk.portable\tools\AnyDesk.exe"' | Set-Content start.bat
+            Write-Host "start.bat corrigido."
+          } else {
+            Write-Host "start.bat não encontrado."
+          }
+          
       - name: Log In To AnyDesk
         run: |
           # Verifica se o arquivo start.bat existe antes de executar
