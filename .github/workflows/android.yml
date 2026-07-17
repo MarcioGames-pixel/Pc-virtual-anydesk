@@ -1,0 +1,38 @@
+name: Emulador Android 4.0 (Ice Cream Sandwich)
+on: workflow_dispatch
+
+jobs:
+  rodar-android-40:
+    runs-on: ubuntu-latest # O Linux é obrigatório para emulação com aceleração gráfica
+
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar ambiente Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Ativar Aceleração KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instalar e Ligar o Android 4.0
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 15       # <- Define estritamente a versão estável do Android 4.0.3
+          target: default     # Usa a imagem limpa e mais leve do sistema (AOSP)
+          arch: x86           # Arquitetura correta para emuladores antigos em PCs de 64-bits
+          
+          script: |
+            echo "Aguardando o Android 4.0 inicializar..."
+            
+            # Comando ADB para ler a versão real que subiu na máquina do GitHub
+            $ANDROID_HOME/platform-tools/adb shell getprop ro.build.version.release
+            
+            echo "Sucesso! O sistema Android antigo está operando em segundo plano."
+            
