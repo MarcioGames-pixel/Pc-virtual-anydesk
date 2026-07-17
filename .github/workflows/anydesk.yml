@@ -1,0 +1,59 @@
+name: Teste de Acesso Remoto AnyDesk - 6 Horas
+
+on:
+  workflow_dispatch:
+
+jobs:
+  conectar-anydesk:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:  
+      - name: Baixar o instalador oficial do AnyDesk  
+        shell: powershell  
+        run: |  
+          Write-Host "Baixando o AnyDesk..."  
+          Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile "AnyDesk.exe"  
+
+      - name: Instalar o AnyDesk em modo silencioso  
+        shell: powershell  
+        run: |  
+          Write-Host "Instalando o aplicativo no sistema..."  
+          Start-Process -FilePath ".\AnyDesk.exe" -ArgumentList "--install", "${env:ProgramFiles(x86)}\AnyDesk", "--silent" -Wait  
+
+      - name: Configurar senha de acesso  
+        shell: powershell  
+        run: |  
+          Write-Host "Definindo a senha de acesso não supervisionado..."  
+          # Comando corrigido para passar a senha corretamente via pipe no Windows
+          cmd /c "echo HelloWorld | `"${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe`" --set-password"
+
+      - name: Obter ID e manter ativo por 6 horas  
+        shell: powershell  
+        run: |  
+          Write-Host "Aguardando inicialização do serviço..."  
+          Start-Sleep -Seconds 15  
+            
+          # Captura o ID limpando espaços ou quebras de linha extras
+          $anydeskId = (& "${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe" --get-id).Trim()
+            
+          Write-Host "=========================================="  
+          Write-Host "👉 SEU ID PARA CONEXÃO É: $anydeskId"  
+          Write-Host "👉 SUA SENHA DEFINIDA É: HelloWorld"  
+          Write-Host "=========================================="  
+            
+          Write-Host "Iniciando loop para manter o runner vivo..."  
+            
+          $wsh = New-Object -ComObject WScript.Shell  
+          $minutosTotais = 350 
+            
+          for ($i = 1; $i -le $minutosTotais; $i++) {  
+              Start-Sleep -Seconds 60  
+              
+              # Envia um comando dummy para o shell não deslogar por inatividade
+              $wsh.SendKeys("{F15}")  
+                
+              if ($i % 10 -eq 0) {  
+                  Write-Host "Dispositivo online. Tempo decorrido: $i minutos."  
+              }  
+          }
