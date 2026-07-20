@@ -26,14 +26,15 @@ jobs:
           mkdir -p dockercomp
           cd dockercomp
           wget -O Win10VLqL.yml \
-          https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
+            https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
 
       - name: Instalar Bore
         run: |
-          wget -O bore.tar.gz https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
+          wget -O bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
           tar -xzf bore.tar.gz
           chmod +x bore
-          sudo mv bore /usr/local/bin/
+          sudo mv bore /usr/local/bin/bore
+          bore --version
 
       - name: Iniciar Bore
         run: |
