@@ -9,25 +9,24 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Instalar Docker
+      - name: Atualizar pacotes
         run: |
           sudo apt update
-          sudo apt install -y docker.io docker-compose wget curl
-          sudo systemctl start docker || true
-          docker --version
+          sudo apt install -y wget curl
 
-      - name: Baixar docker-compose da VM
+      - name: Verificar Docker
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Baixar configuração da VM
         run: |
           mkdir -p dockercomp
           cd dockercomp
-
           wget -O Win10VLqL.yml \
           https://raw.githubusercontent.com/VLqL069/Win10/7a57fa82a99c1cf3cfaeed17a629d0856061692e/Win10VLqL.yml
-
-          ls -la
 
       - name: Instalar Bore
         run: |
@@ -40,12 +39,7 @@ jobs:
         run: |
           bore local 3389 --to bore.pub &
 
-      - name: Iniciar Windows VM
+      - name: Iniciar VM Windows
         run: |
           cd dockercomp
-
-          if command -v docker-compose >/dev/null 2>&1; then
-            sudo docker-compose -f Win10VLqL.yml up
-          else
-            sudo docker compose -f Win10VLqL.yml up
-          fi
+          docker compose -f Win10VLqL.yml up
