@@ -38,7 +38,7 @@ jobs:
 
       - name: Iniciar Bore
         run: |
-          bore local 3389 --to bore.pub &
+          bore local 8006 --to bore.pub &
 
       - name: Iniciar VM Windows
         run: |
