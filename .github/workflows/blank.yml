@@ -1,25 +1,25 @@
-name: Windows VM Docker
+name: Windows VM Docker + Bore
 
 on:
   workflow_dispatch:
 
 jobs:
   vm:
-    name: Start Windows VM
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: Prepare Docker
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Docker
         run: |
           sudo apt update
-
+          sudo apt install -y docker.io docker-compose wget curl
           sudo systemctl start docker || true
-
           docker --version
-          docker compose version || docker-compose --version
 
-      - name: Download Windows VM config
+      - name: Baixar docker-compose da VM
         run: |
           mkdir -p dockercomp
           cd dockercomp
@@ -29,11 +29,22 @@ jobs:
 
           ls -la
 
-      - name: Start Windows VM
+      - name: Instalar Bore
+        run: |
+          wget -O bore.tar.gz https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf bore.tar.gz
+          chmod +x bore
+          sudo mv bore /usr/local/bin/
+
+      - name: Iniciar Bore
+        run: |
+          bore local 3389 --to bore.pub &
+
+      - name: Iniciar Windows VM
         run: |
           cd dockercomp
 
-          if command -v docker-compose; then
+          if command -v docker-compose >/dev/null 2>&1; then
             sudo docker-compose -f Win10VLqL.yml up
           else
             sudo docker compose -f Win10VLqL.yml up
