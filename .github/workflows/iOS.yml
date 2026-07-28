@@ -9,49 +9,71 @@ jobs:
 
     steps:
 
-    - name: Checkout do código fonte
+    - name: Checkout
       uses: actions/checkout@v4
 
 
-    - name: Instalar Dependências
+    - name: Instalar dependências
       run: |
         sudo apt-get update
+
         sudo apt-get install -y \
           build-essential \
+          ninja-build \
           libglib2.0-dev \
           libpixman-1-dev \
-          ninja-build \
           libssl-dev \
+          libslirp-dev \
+          libsdl2-dev \
           unzip \
           curl
 
 
-    - name: Clonar e Compilar QEMU-iOS
+    - name: Baixar e compilar QEMU-iOS
       run: |
         git clone https://github.com/devos50/qemu-ios.git
 
         cd qemu-ios
 
+
+        # Corrige warning tratado como erro
+        sed -i '/uint16_t level;/d' hw/i2c/ipod_touch_i2c.c || true
+
+
         mkdir build
         cd build
 
-        ../configure --target-list=arm-softmmu
+
+        ../configure \
+          --enable-sdl \
+          --disable-cocoa \
+          --target-list=arm-softmmu \
+          --disable-capstone \
+          --disable-werror \
+          --enable-pie \
+          --extra-cflags=-I/usr/include/openssl \
+          --extra-ldflags='-lcrypto'
+
 
         make -j$(nproc)
+
 
         echo "$(pwd)" >> $GITHUB_PATH
 
 
-    - name: Baixar arquivos de boot n72ap
+    - name: Baixar arquivos n72ap
       run: |
-        mkdir -p ios_files
+        mkdir ios_files
         cd ios_files
+
 
         curl -L -o bootrom_240_4 \
         https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/bootrom_240_4
 
+
         curl -L -o nand_n72ap.zip \
         https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nand_n72ap.zip
+
 
         curl -L -o nor_n72ap.bin \
         https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nor_n72ap.bin
@@ -60,20 +82,20 @@ jobs:
         unzip -o nand_n72ap.zip
 
 
-        echo "Arquivos encontrados:"
+        echo "Arquivos:"
         ls -lah
 
 
-        # Ajusta nome caso o zip tenha criado uma pasta
         if [ -f nand.bin ]; then
           mv nand.bin nand_n72ap.bin
         fi
 
 
         if [ ! -f nand_n72ap.bin ]; then
-          echo "NAND não encontrada!"
+          echo "Erro: NAND não encontrada"
           exit 1
         fi
+
 
 
     - name: Instalar Bore
@@ -84,12 +106,15 @@ jobs:
 
         tar -xf bore.tar.gz
 
+
         sudo mv bore /usr/local/bin/bore
+
 
         bore --version
 
 
-    - name: Iniciar QEMU-iOS n72ap e Bore
+
+    - name: Executar QEMU-iOS com Internet e Tunnel
       run: |
 
         cd ios_files
@@ -110,17 +135,19 @@ jobs:
           > qemu.log 2>&1 &
 
 
+
         echo "Esperando QEMU iniciar..."
         sleep 10
 
 
-        echo "Abrindo túnel Bore..."
 
+        echo "Abrindo Bore..."
 
         bore local 2222 --to bore.pub
 
 
-        echo "Mantendo runner ativo..."
+
+        echo "Runner mantido ativo"
 
         while true; do
           sleep 60
