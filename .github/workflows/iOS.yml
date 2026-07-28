@@ -1,0 +1,127 @@
+name: Executar QEMU-iOS (n72ap) com Internet e Bore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-emulator:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Checkout do código fonte
+      uses: actions/checkout@v4
+
+
+    - name: Instalar Dependências
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libglib2.0-dev \
+          libpixman-1-dev \
+          ninja-build \
+          libssl-dev \
+          unzip \
+          curl
+
+
+    - name: Clonar e Compilar QEMU-iOS
+      run: |
+        git clone https://github.com/devos50/qemu-ios.git
+
+        cd qemu-ios
+
+        mkdir build
+        cd build
+
+        ../configure --target-list=arm-softmmu
+
+        make -j$(nproc)
+
+        echo "$(pwd)" >> $GITHUB_PATH
+
+
+    - name: Baixar arquivos de boot n72ap
+      run: |
+        mkdir -p ios_files
+        cd ios_files
+
+        curl -L -o bootrom_240_4 \
+        https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/bootrom_240_4
+
+        curl -L -o nand_n72ap.zip \
+        https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nand_n72ap.zip
+
+        curl -L -o nor_n72ap.bin \
+        https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nor_n72ap.bin
+
+
+        unzip -o nand_n72ap.zip
+
+
+        echo "Arquivos encontrados:"
+        ls -lah
+
+
+        # Ajusta nome caso o zip tenha criado uma pasta
+        if [ -f nand.bin ]; then
+          mv nand.bin nand_n72ap.bin
+        fi
+
+
+        if [ ! -f nand_n72ap.bin ]; then
+          echo "NAND não encontrada!"
+          exit 1
+        fi
+
+
+    - name: Instalar Bore
+      run: |
+        curl -L -o bore.tar.gz \
+        https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
+
+
+        tar -xf bore.tar.gz
+
+        sudo mv bore /usr/local/bin/bore
+
+        bore --version
+
+
+    - name: Iniciar QEMU-iOS n72ap e Bore
+      run: |
+
+        cd ios_files
+
+
+        echo "Iniciando QEMU..."
+
+
+        qemu-system-arm \
+          -M n72ap \
+          -bios bootrom_240_4 \
+          -pflash nor_n72ap.bin \
+          -drive file=nand_n72ap.bin,if=mtd,format=raw \
+          -m 128M \
+          -serial stdio \
+          -net nic \
+          -net user,hostfwd=tcp::2222-:22 \
+          > qemu.log 2>&1 &
+
+
+        echo "Esperando QEMU iniciar..."
+        sleep 10
+
+
+        echo "Abrindo túnel Bore..."
+
+
+        bore local 2222 --to bore.pub
+
+
+        echo "Mantendo runner ativo..."
+
+        while true; do
+          sleep 60
+        done
