@@ -1,10 +1,11 @@
-name: Executar QEMU-iOS (n72ap) com Internet e Bore
+name: Executar QEMU-iOS n72ap com Internet e VNC Bore
 
 on:
   workflow_dispatch:
 
 jobs:
   run-emulator:
+
     runs-on: ubuntu-latest
 
     steps:
@@ -36,10 +37,6 @@ jobs:
         cd qemu-ios
 
 
-        # Corrige warning tratado como erro
-        sed -i '/uint16_t level;/d' hw/i2c/ipod_touch_i2c.c || true
-
-
         mkdir build
         cd build
 
@@ -61,9 +58,11 @@ jobs:
         echo "$(pwd)" >> $GITHUB_PATH
 
 
+
     - name: Baixar arquivos n72ap
       run: |
         mkdir ios_files
+
         cd ios_files
 
 
@@ -82,17 +81,20 @@ jobs:
         unzip -o nand_n72ap.zip
 
 
-        echo "Arquivos:"
+        echo "Arquivos extraídos:"
         ls -lah
 
 
-        if [ -f nand.bin ]; then
-          mv nand.bin nand_n72ap.bin
+        NAND=$(find . -iname "*nand*.bin" | head -n 1)
+
+
+        if [ -n "$NAND" ]; then
+          mv "$NAND" nand_n72ap.bin
         fi
 
 
         if [ ! -f nand_n72ap.bin ]; then
-          echo "Erro: NAND não encontrada"
+          echo "NAND não encontrada"
           exit 1
         fi
 
@@ -100,6 +102,7 @@ jobs:
 
     - name: Instalar Bore
       run: |
+
         curl -L -o bore.tar.gz \
         https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
 
@@ -114,7 +117,7 @@ jobs:
 
 
 
-    - name: Executar QEMU-iOS com Internet e Tunnel
+    - name: Executar QEMU-iOS com VNC e Internet
       run: |
 
         cd ios_files
@@ -130,25 +133,17 @@ jobs:
           -drive file=nand_n72ap.bin,if=mtd,format=raw \
           -m 128M \
           -serial stdio \
+          -vnc :0 \
           -net nic \
-          -net user,hostfwd=tcp::2222-:22 \
+          -net user \
           > qemu.log 2>&1 &
 
 
 
-        echo "Esperando QEMU iniciar..."
-        sleep 10
+        sleep 15
 
 
-
-        echo "Abrindo Bore..."
-
-        bore local 2222 --to bore.pub
+        echo "Abrindo túnel VNC..."
 
 
-
-        echo "Runner mantido ativo"
-
-        while true; do
-          sleep 60
-        done
+        bore local 5900 --to bore.pub
