@@ -1,0 +1,100 @@
+name: Android-x86 4.3 KVM GPU VNC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  android-x86:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+
+      - name: Instalar dependências
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            wget
+
+      - name: Verificar KVM
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "KVM encontrado"
+            sudo chmod 666 /dev/kvm
+          else
+            echo "KVM não disponível neste runner"
+            exit 1
+          fi
+
+      - name: Baixar Android-x86 4.3
+        run: |
+          wget -O android-x86-4.3.iso \
+          https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-x86/android-x86-4.3-20130725.iso
+
+          ls -lh android-x86-4.3.iso
+
+      - name: Criar disco virtual
+        run: |
+          qemu-img create \
+            -f qcow2 \
+            android43.qcow2 \
+            8G
+
+      - name: Iniciar Android-x86
+        run: |
+          nohup qemu-system-x86_64 \
+            -M q35 \
+            -cpu host \
+            -enable-kvm \
+            -smp 4 \
+            -m 2048M \
+            -device qemu-xhci \
+            -device usb-tablet \
+            -device usb-kbd \
+            -device virtio-vga \
+            -device virtio-gpu \
+            -device ich9-intel-hda \
+            -device hda-duplex \
+            -device e1000e,netdev=net0 \
+            -netdev user,id=net0,dns=8.8.8.8 \
+            -drive file=android43.qcow2,format=qcow2 \
+            -cdrom android-x86-4.3.iso \
+            -boot d \
+            -vnc :1 \
+            -monitor none \
+            -name "Android-x86 4.3" \
+            > qemu.log 2>&1 &
+
+          sleep 30
+
+          echo "===== QEMU LOG ====="
+          cat qemu.log || true
+
+      - name: Instalar Bore
+        run: |
+          wget -q \
+          https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+
+          tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+
+          chmod +x bore
+
+      - name: Abrir VNC público
+        run: |
+          nohup ./bore \
+            local 5901 \
+            --to bore.pub \
+            > bore.log 2>&1 &
+
+          sleep 10
+
+          echo "===== BORE ====="
+          cat bore.log
+
+      - name: Manter QEMU ativo
+        run: |
+          echo "Android-x86 4.3 rodando"
+          echo "VNC: porta 5901"
+          sleep 21420
