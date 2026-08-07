@@ -1,4 +1,4 @@
-name: Android-x86 4.3 KVM GPU VNC
+name: Android-x86 4.3 Manual Install KVM VNC
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   android-x86:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
 
     steps:
 
@@ -24,7 +24,7 @@ jobs:
             echo "KVM encontrado"
             sudo chmod 666 /dev/kvm
           else
-            echo "KVM não disponível neste runner"
+            echo "KVM não disponível"
             exit 1
           fi
 
@@ -35,14 +35,14 @@ jobs:
 
           ls -lh android-x86-4.3.iso
 
-      - name: Criar disco virtual
+      - name: Criar QCOW2 20GB
         run: |
           qemu-img create \
             -f qcow2 \
             android43.qcow2 \
-            8G
+            20G
 
-      - name: Iniciar Android-x86
+      - name: Iniciar Android-x86 no VNC
         run: |
           nohup qemu-system-x86_64 \
             -M q35 \
@@ -53,8 +53,7 @@ jobs:
             -device qemu-xhci \
             -device usb-tablet \
             -device usb-kbd \
-            -device virtio-vga \
-            -device virtio-gpu \
+            -vga vmware \
             -device ich9-intel-hda \
             -device hda-duplex \
             -device e1000e,netdev=net0 \
@@ -67,9 +66,9 @@ jobs:
             -name "Android-x86 4.3" \
             > qemu.log 2>&1 &
 
-          sleep 6
+          sleep 10
 
-          echo "===== QEMU LOG ====="
+          echo "===== QEMU ====="
           cat qemu.log || true
 
       - name: Instalar Bore
@@ -78,7 +77,6 @@ jobs:
           https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
 
           tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-
           chmod +x bore
 
       - name: Abrir VNC público
@@ -86,16 +84,40 @@ jobs:
           nohup ./bore \
             local 5901 \
             --to bore.pub \
-            --port 5901 \
             > bore.log 2>&1 &
 
           sleep 10
 
-          echo "===== BORE ====="
+          echo "===== CONEXÃO VNC ====="
           cat bore.log
 
-      - name: Manter QEMU ativo
+      - name: Aguardar instalação manual
         run: |
-          echo "Android-x86 4.3 rodando"
-          echo "VNC: porta 5901"
-          sleep 21420
+          echo "======================================"
+          echo "Instale o Android-x86 pelo VNC agora"
+          echo "Quando terminar, feche o QEMU"
+          echo "======================================"
+
+          sleep 6600
+
+      - name: Desligar QEMU
+        run: |
+          killall qemu-system-x86_64 || true
+          killall bore || true
+
+      - name: Compactar QCOW2
+        run: |
+          qemu-img convert \
+            -O qcow2 \
+            -c \
+            android43.qcow2 \
+            android43-installed-20GB.qcow2
+
+          ls -lh android43-installed-20GB.qcow2
+
+      - name: Publicar Android QCOW2
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-x86-4.3-20GB-installed
+          path: android43-installed-20GB.qcow2
+          retention-days: 7
