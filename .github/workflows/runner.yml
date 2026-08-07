@@ -84,6 +84,7 @@ jobs:
           nohup ./bore \
             local 5901 \
             --to bore.pub \
+            --port 5901 \
             > bore.log 2>&1 &
 
           sleep 10
@@ -98,7 +99,7 @@ jobs:
           echo "Quando terminar, feche o QEMU"
           echo "======================================"
 
-          sleep 6600
+          sleep 600
 
       - name: Desligar QEMU
         run: |
