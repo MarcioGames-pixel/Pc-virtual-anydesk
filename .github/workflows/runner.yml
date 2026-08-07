@@ -67,7 +67,7 @@ jobs:
             -name "Android-x86 4.3" \
             > qemu.log 2>&1 &
 
-          sleep 30
+          sleep 6
 
           echo "===== QEMU LOG ====="
           cat qemu.log || true
@@ -86,6 +86,7 @@ jobs:
           nohup ./bore \
             local 5901 \
             --to bore.pub \
+            --port 5901 \
             > bore.log 2>&1 &
 
           sleep 10
