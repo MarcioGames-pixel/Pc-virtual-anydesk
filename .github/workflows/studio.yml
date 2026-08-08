@@ -1,4 +1,4 @@
-name: Android 2.3.3 VNC Bore Cache
+name: Android 2.3 API 10 VNC Bore
 
 on:
   workflow_dispatch:
@@ -9,10 +9,15 @@ jobs:
     timeout-minutes: 120
 
     steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Instalar dependências
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             openjdk-17-jdk \
             wget \
             unzip \
@@ -20,6 +25,8 @@ jobs:
             xvfb \
             x11vnc \
             fluxbox \
+            qemu-kvm \
+            libvirt-daemon-system \
             libpulse0 \
             libnss3 \
             libx11-6 \
@@ -30,16 +37,53 @@ jobs:
             libxtst6 \
             libglu1-mesa
 
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
-          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> "$GITHUB_PATH"
-
-          sudo update-alternatives --set java \
-            /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-
-          sudo update-alternatives --set javac \
-            /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
-
           java -version
+
+      - name: Configurar KVM
+        run: |
+          echo "=== /dev/kvm ANTES ==="
+          ls -l /dev/kvm || true
+
+          sudo groupadd -f kvm
+
+          sudo usermod -aG kvm "$USER"
+
+          sudo chown root:kvm /dev/kvm || true
+          sudo chmod 660 /dev/kvm || true
+
+          echo "=== GRUPO KVM ==="
+          getent group kvm || true
+
+          echo "=== USUÁRIO ==="
+          id
+
+          echo "=== /dev/kvm DEPOIS ==="
+          ls -l /dev/kvm || true
+
+          if [ ! -e /dev/kvm ]; then
+            echo "ERRO: /dev/kvm não existe neste runner."
+            exit 1
+          fi
+
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            echo "Tentando corrigir permissões..."
+            sudo chmod 666 /dev/kvm
+          fi
+
+          ls -l /dev/kvm
+
+      - name: Testar KVM
+        run: |
+          echo "=== KVM ==="
+
+          if [ -e /dev/kvm ]; then
+            echo "/dev/kvm encontrado."
+          else
+            echo "/dev/kvm não encontrado."
+            exit 1
+          fi
+
+          ls -l /dev/kvm
 
       - name: Instalar Android SDK
         run: |
@@ -65,6 +109,7 @@ jobs:
 
           echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
@@ -93,7 +138,7 @@ jobs:
             "platform-tools" \
             "emulator"
 
-      - name: Instalar imagem Android 2.3 API 10
+      - name: Instalar Android 2.3 API 10
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
@@ -104,10 +149,6 @@ jobs:
           test -d \
             "$HOME/android-sdk/system-images/android-10/default/x86"
 
-          echo "Imagem encontrada:"
-          ls -lah \
-            "$HOME/android-sdk/system-images/android-10/default/x86"
-
       - name: Restaurar cache
         id: cache-avd
         uses: actions/cache@v4
@@ -115,7 +156,7 @@ jobs:
           path: |
             ~/.android/avd
             ~/.android/adb*
-          key: android23-api10-v4-${{ runner.os }}
+          key: android23-api10-v5-${{ runner.os }}
 
       - name: Criar AVD manualmente
         run: |
@@ -133,7 +174,7 @@ jobs:
 
           else
 
-            echo "Criando AVD manualmente..."
+            echo "Criando AVD..."
 
             rm -rf "$AVD"
             rm -f "$HOME/.android/avd/Android23.ini"
@@ -182,17 +223,11 @@ jobs:
 
           fi
 
-          echo "=== Android23.ini ==="
+          echo "=== AVD ==="
           cat "$HOME/.android/avd/Android23.ini"
 
-          echo "=== config.ini ==="
+          echo "=== CONFIG ==="
           cat "$AVD/config.ini"
-
-          echo "=== AVD ==="
-          ls -lah "$AVD"
-
-          test -f "$HOME/.android/avd/Android23.ini"
-          test -f "$AVD/config.ini"
 
       - name: Iniciar Xvfb
         run: |
@@ -208,10 +243,7 @@ jobs:
 
           sleep 3
 
-          if ! kill -0 "$(cat xvfb.pid)" 2>/dev/null; then
-            cat xvfb.log
-            exit 1
-          fi
+          kill -0 "$(cat xvfb.pid)"
 
       - name: Iniciar Fluxbox
         run: |
@@ -227,11 +259,17 @@ jobs:
       - name: Iniciar Android 2.3
         run: |
           export DISPLAY=:99
+
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_SDK_ROOT="$HOME/android-sdk"
 
           export PATH="$JAVA_HOME/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
+
+          echo "=== KVM ==="
+          ls -l /dev/kvm
+
+          echo "=== INICIANDO EMULADOR ==="
 
           emulator \
             -avd Android23 \
@@ -241,6 +279,7 @@ jobs:
             -no-audio \
             -no-boot-anim \
             -no-snapshot \
+            -no-metrics \
             > emulator.log 2>&1 &
 
           echo $! > emulator.pid
@@ -290,7 +329,7 @@ jobs:
             exit 1
           fi
 
-          echo "=== PORTA VNC ==="
+          echo "=== VNC ==="
           ss -lntp | grep 5901 || true
 
       - name: Instalar Bore
