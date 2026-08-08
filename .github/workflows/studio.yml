@@ -1,4 +1,4 @@
-name: Android 2.3 VNC Bore Persistent AVD
+name: Android 2.3 VNC Bore Cache
 
 on:
   workflow_dispatch:
@@ -30,13 +30,20 @@ jobs:
             libxtst6 \
             libglu1-mesa
 
-          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-          sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> "$GITHUB_PATH"
 
-          java -version
+          sudo update-alternatives --set java \
+            /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+
+          sudo update-alternatives --set javac \
+            /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
 
       - name: Instalar Android SDK
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+
           mkdir -p "$HOME/android-sdk/cmdline-tools"
 
           cd /tmp
@@ -44,6 +51,8 @@ jobs:
           wget -q \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -O sdk.zip
+
+          rm -rf "$HOME/android-sdk/cmdline-tools/latest"
 
           unzip -q sdk.zip \
             -d "$HOME/android-sdk/cmdline-tools"
@@ -54,34 +63,59 @@ jobs:
 
           echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
-
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
 
-      - name: Verificar SDK
+      - name: Verificar Java e SDK Manager
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
+
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "PATH=$PATH"
+
+          echo "Java:"
+          which java
           java -version
+
+          echo "SDK Manager:"
+          which sdkmanager
+
+          head -30 "$(which sdkmanager)"
+
           sdkmanager --version
 
       - name: Aceitar licenças
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
+
           yes | sdkmanager --licenses || true
 
       - name: Instalar ferramentas
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
+
           sdkmanager \
             "platform-tools" \
             "emulator"
 
       - name: Verificar imagem Android 2.3
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
+
           sdkmanager --list \
             | grep "system-images;android-10" \
             | head -30 || true
 
       - name: Instalar imagem Android 2.3
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
+
           yes | sdkmanager \
             "system-images;android-10;default;x86"
 
@@ -93,25 +127,26 @@ jobs:
             ~/.android/avd
             ~/.android/adb*
           key: android23-avd-v1-${{ runner.os }}
+          restore-keys: |
+            android23-avd-v1-
 
-      - name: Criar AVD se necessário
+      - name: Criar AVD
         run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/emulator:$PATH"
+
           mkdir -p "$HOME/.android/avd"
 
           if [ -f "$HOME/.android/avd/Android23.ini" ] && \
              [ -d "$HOME/.android/avd/Android23.avd" ]; then
-
             echo "AVD restaurado do cache."
-
           else
-
-            echo "Criando AVD novo."
+            echo "Criando AVD."
 
             echo "no" | avdmanager create avd \
               -n Android23 \
               -k "system-images;android-10;default;x86" \
               --force
-
           fi
 
           emulator -list-avds
@@ -162,6 +197,8 @@ jobs:
       - name: Iniciar Android 2.3
         run: |
           export DISPLAY=:99
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
 
           emulator \
             -avd Android23 \
@@ -243,7 +280,7 @@ jobs:
 
           cat bore.log
 
-      - name: Verificar estado do Android
+      - name: Verificar Android
         run: |
           adb shell getprop ro.build.version.release || true
           adb shell getprop ro.build.version.sdk || true
@@ -252,7 +289,6 @@ jobs:
       - name: Manter execução
         run: |
           while true; do
-
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               echo "Emulador encerrou."
               cat emulator.log
@@ -274,7 +310,7 @@ jobs:
             sleep 10
           done
 
-      - name: Salvar AVD
+      - name: Salvar cache do AVD
         if: always()
         uses: actions/cache/save@v4
         with:
