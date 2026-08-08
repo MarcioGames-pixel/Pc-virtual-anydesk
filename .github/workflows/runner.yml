@@ -1,169 +1,158 @@
-name: Android-x86 4.3 Manual Install KVM VNC
+name: Android-x86 4.3 KVM VNC ADB
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 jobs:
-  android-x86:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+android-x86:
+runs-on: ubuntu-latest
+timeout-minutes: 120
 
-    steps:
-      - name: Instalar dependências
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            qemu-system-x86 \
-            qemu-utils \
-            wget \
-            pulseaudio \
-            pulseaudio-utils \
-            alsa-utils
+steps:
+  - name: Instalar dependências
+    run: |
+      sudo apt update
+      sudo apt install -y \
+        qemu-system-x86 \
+        qemu-utils \
+        wget \
+        pulseaudio \
+        pulseaudio-utils
 
-      - name: Verificar KVM
-        run: |
-          if [ -e /dev/kvm ]; then
-            sudo chmod 666 /dev/kvm
-          else
-            exit 1
-          fi
+  - name: Verificar KVM
+    run: |
+      if [ ! -e /dev/kvm ]; then
+        echo "KVM não disponível"
+        exit 1
+      fi
+      sudo chmod 666 /dev/kvm
 
-      - name: Iniciar PulseAudio
-        run: |
-          pulseaudio --kill || true
-          pulseaudio \
-            --daemonize=yes \
-            --exit-idle-time=-1 \
-            --system=false \
-            --disallow-exit
-          sleep 3
-          pactl info
+  - name: Iniciar PulseAudio
+    run: |
+      pulseaudio --kill || true
+      pulseaudio \
+        --daemonize=yes \
+        --exit-idle-time=-1 \
+        --system=false \
+        --disallow-exit
+      sleep 3
+      pactl info
 
-      - name: Baixar Android-x86 4.3
-        run: |
-          wget -O android-x86-4.3.iso \
-            https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-x86/android-x86-4.3-20130725.iso
+  - name: Baixar Android-x86 4.3
+    run: |
+      wget -O android-x86-4.3.iso \
+        https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-x86/android-x86-4.3-20130725.iso
 
-      - name: Procurar QCOW2 salvo
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: Android-x86-4.3-20GB-installed
-          merge-multiple: true
-          path: restored
+  - name: Criar QCOW2
+    run: |
+      qemu-img create -f qcow2 android43.qcow2 20G
 
-      - name: Preparar QCOW2
-        run: |
-          if [ -f restored/android43-installed-20GB.qcow2 ]; then
-            cp restored/android43-installed-20GB.qcow2 android43.qcow2
-          else
-            qemu-img create -f qcow2 android43.qcow2 20G
-          fi
+  - name: Iniciar Android-x86
+    run: |
+      export PULSE_SERVER=127.0.0.1
+      export QEMU_AUDIO_DRV=pa
 
-          qemu-img info android43.qcow2
+      nohup qemu-system-x86_64 \
+        -M pc,acpi=on \
+        -cpu host \
+        -accel kvm \
+        -smp 4 \
+        -m 2048M \
+        -device qemu-xhci \
+        -device usb-tablet \
+        -device usb-kbd \
+        -vga vmware \
+        -audiodev pa,id=audio0,server=127.0.0.1,out.mixing-engine=on,out.fixed-settings=on \
+        -device ES1370,audiodev=audio0 \
+        -device rtl8139,netdev=net0 \
+        -netdev user,id=net0,dns=8.8.8.8,hostfwd=tcp::5555-:5555 \
+        -drive file=android43.qcow2,format=qcow2 \
+        -cdrom android-x86-4.3.iso \
+        -boot d \
+        -vnc :1 \
+        -monitor none \
+        -name "Android-x86 4.3 Touch" \
+        > qemu.log 2>&1 &
 
-      - name: Iniciar Android-x86 no VNC
-        run: |
-          export PULSE_SERVER=127.0.0.1
-          export QEMU_AUDIO_DRV=pa
+      echo $! > qemu.pid
+      sleep 10
+      cat qemu.log || true
 
-          nohup qemu-system-x86_64 \
-            -M pc,acpi=on \
-            -cpu host \
-            -accel kvm \
-            -smp 4 \
-            -m 2048M \
-            -device qemu-xhci \
-            -device usb-tablet \
-            -device usb-kbd \
-            -vga vmware \
-            -global VGA.vgamem_mb=32 \
-            -audiodev pa,id=audio0,server=127.0.0.1,out.mixing-engine=on,out.fixed-settings=on \
-            -device ES1370,audiodev=audio0 \
-            -device rtl8139,netdev=net0 \
-            -netdev user,id=net0,dns=8.8.8.8,hostfwd=tcp::5555-:5555 \
-            -drive file=android43.qcow2,format=qcow2 \
-            -cdrom android-x86-4.3.iso \
-            -boot d \
-            -vnc :1 \
-            -monitor stdio \
-            -name "Android-x86 4.3 Touch" \
-            > qemu.log 2>&1 &
+  - name: Instalar Bore
+    run: |
+      wget -q \
+        https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+      tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+      chmod +x bore
 
-          echo $! > qemu.pid
-          sleep 10
-          cat qemu.log || true
+  - name: Abrir ADB e VNC
+    run: |
+      nohup ./bore \
+        local 5555 \
+        --to bore.pub \
+        --port 5555 \
+        > adb-bore.log 2>&1 &
 
-      - name: Instalar Bore
-        run: |
-          wget -q \
-            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-          tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-          chmod +x bore
+      nohup ./bore \
+        local 5901 \
+        --to bore.pub \
+        --port 5901 \
+        > vnc-bore.log 2>&1 &
 
-      - name: Abrir VNC público
-        run: |
-          nohup ./bore \
-            local 5901 \
-            --to bore.pub \
-            --port 5901 \
-            > bore.log 2>&1 &
+      sleep 10
 
-          echo $! > bore.pid
-          sleep 10
-          cat bore.log || true
+      echo "===== ADB ====="
+      cat adb-bore.log || true
 
-      - name: Aguardar instalação manual
-        run: |
-          sleep 600
+      echo "===== VNC ====="
+      cat vnc-bore.log || true
 
-      - name: Desligar QEMU
-        if: always()
-        run: |
-          if [ -f qemu.pid ]; then
-            kill "$(cat qemu.pid)" || true
-          fi
-          killall qemu-system-x86_64 || true
-          killall bore || true
+  - name: Aguardar instalação
+    run: |
+      echo "ADB: bore.pub:5555"
+      echo "VNC: bore.pub:5901"
+      sleep 600
 
-      - name: Verificar QCOW2
-        if: always()
-        run: |
-          if [ -f android43.qcow2 ]; then
-            ls -lh android43.qcow2
-            qemu-img check android43.qcow2 || true
-            qemu-img info android43.qcow2
-          else
-            exit 1
-          fi
+  - name: Desligar QEMU
+    if: always()
+    run: |
+      killall qemu-system-x86_64 || true
+      killall bore || true
 
-      - name: Compactar QCOW2
-        if: always()
-        run: |
-          qemu-img convert \
-            -O qcow2 \
-            -c \
-            android43.qcow2 \
-            android43-installed-20GB.qcow2
+  - name: Verificar QCOW2
+    if: always()
+    run: |
+      qemu-img check android43.qcow2 || true
+      qemu-img info android43.qcow2
 
-          ls -lh android43-installed-20GB.qcow2
+  - name: Compactar QCOW2
+    if: always()
+    run: |
+      qemu-img convert \
+        -O qcow2 \
+        -c \
+        android43.qcow2 \
+        android43-installed-20GB.qcow2
 
-      - name: Salvar QCOW2
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-x86-4.3-20GB-installed
-          path: android43-installed-20GB.qcow2
-          retention-days: 7
-          overwrite: true
+      ls -lh android43-installed-20GB.qcow2
 
-      - name: Salvar logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-x86-4.3-logs
-          path: |
-            qemu.log
-            bore.log
-          retention-days: 7
-          overwrite: true
+  - name: Publicar QCOW2
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: Android-x86-4.3-20GB-installed
+      path: android43-installed-20GB.qcow2
+      retention-days: 7
+      overwrite: true
+
+  - name: Publicar logs
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: Android-x86-4.3-logs
+      path: |
+        qemu.log
+        adb-bore.log
+        vnc-bore.log
+      retention-days: 7
+      overwrite: true
