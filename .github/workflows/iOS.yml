@@ -12,7 +12,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Dependências
+      - name: Instalar dependências
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -41,7 +41,7 @@ jobs:
             --disable-cocoa \
             --target-list=arm-softmmu \
             --disable-capstone \
-            --disable-slirp \
+            --enable-slirp \
             --extra-cflags=-I/usr/include/openssl \
             --extra-ldflags='-lcrypto' \
             --disable-werror \
@@ -50,6 +50,8 @@ jobs:
           make -j"$(nproc)"
 
           test -x arm-softmmu/qemu-system-arm
+
+          ./arm-softmmu/qemu-system-arm -netdev help
 
       - name: Criar diretório
         run: |
@@ -78,29 +80,37 @@ jobs:
             -o nor_n72ap.bin \
             https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nor_n72ap.bin
 
+          test -s bootrom_240_4
+          test -s nand_n72ap.zip
+          test -s nor_n72ap.bin
+
           unzip -o nand_n72ap.zip
 
           rm -f nand_n72ap.zip
 
+          test -d nand
           test -s bootrom_240_4
           test -s nor_n72ap.bin
-          test -d nand
 
-          echo "Arquivos n72ap preparados:"
+          echo "Arquivos preparados:"
           ls -lh
           du -sh nand
 
-      - name: Verificar cache
+      - name: Verificar arquivos n72ap
         working-directory: ios_files
         run: |
-          echo "Conteúdo:"
-          ls -lh
-
-          test -s bootrom_240_4
-          test -s nor_n72ap.bin
+          test -f bootrom_240_4
+          test -f nor_n72ap.bin
           test -d nand
 
-          echo "NAND:"
+          echo "=== BOOTROM ==="
+          ls -lh bootrom_240_4
+
+          echo "=== NOR ==="
+          ls -lh nor_n72ap.bin
+
+          echo "=== NAND ==="
+          du -sh nand
           find nand -type f | head -20
 
       - name: Instalar Bore
@@ -136,17 +146,20 @@ jobs:
             -net user \
             > qemu.log 2>&1 &
 
-          echo $! > qemu.pid
+          QEMU_PID=$!
+          echo "$QEMU_PID" > qemu.pid
 
           sleep 15
 
-          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "QEMU encerrou."
+          if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo "QEMU encerrou durante a inicialização."
+            echo "===== QEMU LOG ====="
             cat qemu.log
             exit 1
           fi
 
           echo "QEMU executando."
+          echo "PID: $QEMU_PID"
 
       - name: Abrir VNC
         working-directory: ios_files
@@ -156,12 +169,20 @@ jobs:
             --port 5900 \
             > bore.log 2>&1 &
 
-          echo $! > bore.pid
+          BORE_PID=$!
+          echo "$BORE_PID" > bore.pid
 
           sleep 10
 
+          if ! kill -0 "$BORE_PID" 2>/dev/null; then
+            echo "Bore encerrou."
+            cat bore.log
+            exit 1
+          fi
+
           echo "======================================"
-          echo "VNC: bore.pub:5900"
+          echo "VNC"
+          echo "bore.pub:5900"
           echo "======================================"
 
           cat bore.log
@@ -172,12 +193,14 @@ jobs:
           while true; do
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
               echo "QEMU encerrou."
+              echo "===== QEMU LOG ====="
               cat qemu.log
               exit 1
             fi
 
             if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
               echo "Bore encerrou."
+              echo "===== BORE LOG ====="
               cat bore.log
               exit 1
             fi
@@ -185,7 +208,7 @@ jobs:
             sleep 10
           done
 
-      - name: Logs
+      - name: Salvar logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
