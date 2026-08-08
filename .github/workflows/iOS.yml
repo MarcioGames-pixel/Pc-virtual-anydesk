@@ -12,24 +12,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Dependências
+      - name: Instalar dependências
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             ninja-build \
-            libglib2.0-dev \
-            libpixman-1-dev \
+            pkg-config \
             libssl-dev \
-            libslirp-dev \
             libsdl2-dev \
+            libpixman-1-dev \
+            libpixman-1-0 \
+            libglib2.0-dev \
+            libslirp-dev \
             unzip \
             curl
 
-      - name: Compilar QEMU-iOS
+      - name: Baixar e compilar QEMU-iOS
         run: |
           git clone --depth 1 https://github.com/devos50/qemu-ios.git
+
           cd qemu-ios
+
           mkdir build
           cd build
 
@@ -38,19 +42,19 @@ jobs:
             --disable-cocoa \
             --target-list=arm-softmmu \
             --disable-capstone \
-            --disable-werror \
-            --enable-pie \
+            --disable-slirp \
             --extra-cflags=-I/usr/include/openssl \
-            --extra-ldflags=-lcrypto
+            --extra-ldflags='-lcrypto' \
+            --disable-werror \
+            --enable-pie
 
           make -j"$(nproc)"
 
-          echo "$PWD" >> "$GITHUB_PATH"
+          test -x arm-softmmu/qemu-system-arm
 
-      - name: Preparar diretório
+      - name: Criar diretório dos arquivos
         run: |
-          rm -rf ios_files
-          mkdir ios_files
+          mkdir -p ios_files
 
       - name: Baixar bootrom
         working-directory: ios_files
@@ -59,8 +63,8 @@ jobs:
             -o bootrom_240_4 \
             https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/bootrom_240_4
 
-          ls -lh bootrom_240_4
           test -s bootrom_240_4
+          ls -lh bootrom_240_4
 
       - name: Baixar NAND
         working-directory: ios_files
@@ -69,9 +73,8 @@ jobs:
             -o nand_n72ap.zip \
             https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nand_n72ap.zip
 
-          ls -lh nand_n72ap.zip
-          file nand_n72ap.zip
           test -s nand_n72ap.zip
+          ls -lh nand_n72ap.zip
 
       - name: Baixar NOR
         working-directory: ios_files
@@ -80,55 +83,18 @@ jobs:
             -o nor_n72ap.bin \
             https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nor_n72ap.bin
 
-          ls -lh nor_n72ap.bin
           test -s nor_n72ap.bin
+          ls -lh nor_n72ap.bin
 
       - name: Extrair NAND
         working-directory: ios_files
         run: |
-          echo "Conteúdo do ZIP:"
-          unzip -l nand_n72ap.zip
-
-          echo "Extraindo:"
           unzip -o nand_n72ap.zip
 
-          echo "Arquivos:"
-          find . -maxdepth 2 -type f -printf '%p - %s bytes\n'
+          echo "Arquivos NAND:"
+          find nand -type f | head -30
 
-      - name: Preparar NAND
-        working-directory: ios_files
-        run: |
-          if [ -f nand_n72ap.bin ]; then
-            echo "nand_n72ap.bin já existe"
-          else
-            NAND=$(find . -type f -iname '*nand*.bin' | head -n 1)
-
-            if [ -z "$NAND" ]; then
-              echo "NAND não encontrada"
-              exit 1
-            fi
-
-            echo "NAND encontrada: $NAND"
-            cp "$NAND" nand_n72ap.bin
-          fi
-
-          ls -lh nand_n72ap.bin
-          test -s nand_n72ap.bin
-
-      - name: Validar arquivos
-        working-directory: ios_files
-        run: |
-          echo "=== BOOTROM ==="
-          ls -lh bootrom_240_4
-
-          echo "=== NOR ==="
-          ls -lh nor_n72ap.bin
-
-          echo "=== NAND ==="
-          ls -lh nand_n72ap.bin
-
-          echo "=== TODOS ==="
-          ls -lah
+          test -d nand
 
       - name: Instalar Bore
         run: |
@@ -137,40 +103,48 @@ jobs:
             https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
 
           tar -xzf bore.tar.gz
+
           chmod +x bore
+
           sudo mv bore /usr/local/bin/bore
 
           bore --version
 
-      - name: Iniciar QEMU
+      - name: Iniciar QEMU-iOS
         working-directory: ios_files
         run: |
-          qemu-system-arm \
-            -M n72ap \
-            -bios bootrom_240_4 \
-            -pflash nor_n72ap.bin \
-            -drive file=nand_n72ap.bin,if=mtd,format=raw \
-            -m 128M \
-            -serial stdio \
+          QEMU="../qemu-ios/build/arm-softmmu/qemu-system-arm"
+
+          test -x "$QEMU"
+          test -f bootrom_240_4
+          test -f nor_n72ap.bin
+          test -d nand
+
+          "$QEMU" \
+            -M iPod-Touch,bootrom=bootrom_240_4,nand=nand,nor=nor_n72ap.bin \
+            -serial mon:stdio \
+            -cpu max \
+            -m 2G \
+            -d unimp \
             -vnc :0 \
-            -net nic \
-            -net user \
             > qemu.log 2>&1 &
 
-          echo $! > qemu.pid
+          QEMU_PID=$!
+          echo "$QEMU_PID" > qemu.pid
 
           sleep 15
 
-          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "QEMU encerrou."
+          if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo "QEMU encerrou durante a inicialização."
+            echo "===== QEMU LOG ====="
             cat qemu.log
             exit 1
           fi
 
-          echo "QEMU está rodando."
-          cat qemu.log
+          echo "QEMU está executando."
+          echo "PID: $QEMU_PID"
 
-      - name: Abrir VNC
+      - name: Abrir VNC Bore
         working-directory: ios_files
         run: |
           bore local 5900 \
@@ -178,31 +152,45 @@ jobs:
             --port 5900 \
             > bore.log 2>&1 &
 
-          echo $! > bore.pid
+          BORE_PID=$!
+          echo "$BORE_PID" > bore.pid
 
           sleep 10
 
-          echo "================================"
-          echo "VNC: bore.pub:5900"
-          echo "================================"
+          echo "======================================"
+          echo "VNC"
+          echo "bore.pub:5900"
+          echo "======================================"
 
           cat bore.log
 
-      - name: Manter QEMU ativo
+      - name: Manter em execução
         working-directory: ios_files
         run: |
           while true; do
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
               echo "QEMU encerrou."
+              echo "===== QEMU LOG ====="
               cat qemu.log
               exit 1
             fi
 
             if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
               echo "Bore encerrou."
+              echo "===== BORE LOG ====="
               cat bore.log
               exit 1
             fi
 
             sleep 10
           done
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ios-logs
+          path: |
+            ios_files/qemu.log
+            ios_files/bore.log
+          retention-days: 7
