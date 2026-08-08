@@ -39,6 +39,8 @@ jobs:
           sudo update-alternatives --set javac \
             /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
 
+          java -version
+
       - name: Instalar Android SDK
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -67,23 +69,15 @@ jobs:
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
 
-      - name: Verificar Java e SDK Manager
+      - name: Verificar SDK Manager
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "PATH=$PATH"
-
-          echo "Java:"
           which java
           java -version
 
-          echo "SDK Manager:"
           which sdkmanager
-
-          head -30 "$(which sdkmanager)"
-
           sdkmanager --version
 
       - name: Aceitar licenças
@@ -102,14 +96,14 @@ jobs:
             "platform-tools" \
             "emulator"
 
-      - name: Verificar imagem Android 2.3
+      - name: Verificar Android 2.3
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
-          sdkmanager --list \
-            | grep "system-images;android-10" \
-            | head -30 || true
+          sdkmanager --list |
+            grep "system-images;android-10" |
+            head -30 || true
 
       - name: Instalar imagem Android 2.3
         run: |
@@ -127,33 +121,60 @@ jobs:
             ~/.android/avd
             ~/.android/adb*
           key: android23-avd-v1-${{ runner.os }}
-          restore-keys: |
-            android23-avd-v1-
 
       - name: Criar AVD
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/emulator:$PATH"
+          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
 
           mkdir -p "$HOME/.android/avd"
 
-          if [ -f "$HOME/.android/avd/Android23.ini" ] && \
+          if [ -f "$HOME/.android/avd/Android23.ini" ] &&
              [ -d "$HOME/.android/avd/Android23.avd" ]; then
-            echo "AVD restaurado do cache."
+
+            echo "AVD encontrado no cache."
+
           else
-            echo "Criando AVD."
+
+            echo "AVD não encontrado. Criando..."
+
+            rm -rf "$HOME/.android/avd/Android23.avd"
+            rm -f "$HOME/.android/avd/Android23.ini"
 
             echo "no" | avdmanager create avd \
               -n Android23 \
               -k "system-images;android-10;default;x86" \
               --force
+
           fi
 
+          echo "AVDs:"
           emulator -list-avds
+
+          test -d "$HOME/.android/avd/Android23.avd"
+          test -f "$HOME/.android/avd/Android23.ini"
 
       - name: Configurar AVD
         run: |
           AVD="$HOME/.android/avd/Android23.avd"
+
+          test -d "$AVD"
+
+          if [ ! -f "$AVD/config.ini" ]; then
+            touch "$AVD/config.ini"
+          fi
+
+          sed -i '/^hw.keyboard=/d' "$AVD/config.ini"
+          sed -i '/^hw.mainKeys=/d' "$AVD/config.ini"
+          sed -i '/^hw.audioInput=/d' "$AVD/config.ini"
+          sed -i '/^hw.audioOutput=/d' "$AVD/config.ini"
+          sed -i '/^hw.lcd.width=/d' "$AVD/config.ini"
+          sed -i '/^hw.lcd.height=/d' "$AVD/config.ini"
+          sed -i '/^hw.lcd.density=/d' "$AVD/config.ini"
+          sed -i '/^hw.ramSize=/d' "$AVD/config.ini"
+          sed -i '/^hw.cpu.ncore=/d' "$AVD/config.ini"
+          sed -i '/^hw.gpu.enabled=/d' "$AVD/config.ini"
+          sed -i '/^hw.gpu.mode=/d' "$AVD/config.ini"
 
           cat >> "$AVD/config.ini" <<'EOF'
           hw.keyboard=yes
@@ -169,6 +190,9 @@ jobs:
           hw.gpu.mode=swiftshader_indirect
           EOF
 
+          echo "=== AVD CONFIG ==="
+          cat "$AVD/config.ini"
+
       - name: Iniciar Xvfb
         run: |
           export DISPLAY=:99
@@ -182,6 +206,11 @@ jobs:
           echo $! > xvfb.pid
 
           sleep 3
+
+          if ! kill -0 "$(cat xvfb.pid)" 2>/dev/null; then
+            cat xvfb.log
+            exit 1
+          fi
 
       - name: Iniciar Fluxbox
         run: |
@@ -222,7 +251,7 @@ jobs:
 
           adb wait-for-device
 
-          echo "ADB:"
+          echo "=== ADB ==="
           adb devices
 
       - name: Iniciar VNC
@@ -242,6 +271,13 @@ jobs:
 
           sleep 5
 
+          if ! kill -0 "$(cat vnc.pid)" 2>/dev/null; then
+            echo "VNC encerrou."
+            cat vnc.log
+            exit 1
+          fi
+
+          echo "=== VNC ==="
           ss -lntp | grep 5901 || true
 
       - name: Instalar Bore
@@ -275,6 +311,7 @@ jobs:
 
           echo "======================================"
           echo "ANDROID 2.3"
+          echo "======================================"
           echo "VNC: bore.pub:5901"
           echo "======================================"
 
@@ -289,6 +326,7 @@ jobs:
       - name: Manter execução
         run: |
           while true; do
+
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               echo "Emulador encerrou."
               cat emulator.log
@@ -309,15 +347,6 @@ jobs:
 
             sleep 10
           done
-
-      - name: Salvar cache do AVD
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.android/avd
-            ~/.android/adb*
-          key: android23-avd-v1-${{ runner.os }}-${{ github.run_id }}
 
       - name: Logs
         if: always()
