@@ -93,101 +93,106 @@ jobs:
             "platform-tools" \
             "emulator"
 
-      - name: Instalar Android 2.3 API 10
+      - name: Instalar imagem Android 2.3 API 10
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
-          yes | sdkmanager \
+          sdkmanager \
             "system-images;android-10;default;x86"
 
           test -d \
             "$HOME/android-sdk/system-images/android-10/default/x86"
 
-      - name: Restaurar cache do AVD
-        id: avd-cache
+          echo "Imagem encontrada:"
+          ls -lah \
+            "$HOME/android-sdk/system-images/android-10/default/x86"
+
+      - name: Restaurar cache
+        id: cache-avd
         uses: actions/cache@v4
         with:
           path: |
             ~/.android/avd
             ~/.android/adb*
-          key: android23-api10-avd-v1-${{ runner.os }}
+          key: android23-api10-v4-${{ runner.os }}
 
-      - name: Criar AVD sem hardware profile
+      - name: Criar AVD manualmente
         run: |
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/android-sdk"
 
           mkdir -p "$HOME/.android/avd"
 
-          if [ -d "$HOME/.android/avd/Android23.avd" ] &&
-             [ -f "$HOME/.android/avd/Android23.ini" ]; then
+          AVD="$HOME/.android/avd/Android23.avd"
+
+          if [ -f "$HOME/.android/avd/Android23.ini" ] &&
+             [ -f "$AVD/config.ini" ]; then
 
             echo "AVD encontrado no cache."
 
           else
 
-            echo "Criando AVD..."
+            echo "Criando AVD manualmente..."
 
-            rm -rf "$HOME/.android/avd/Android23.avd"
+            rm -rf "$AVD"
             rm -f "$HOME/.android/avd/Android23.ini"
 
-            printf "no\n" | avdmanager create avd \
-              --name Android23 \
-              --package "system-images;android-10;default;x86" \
-              --force
+            mkdir -p "$AVD"
 
-          fi
+            cat > "$HOME/.android/avd/Android23.ini" <<EOF
+          avd.ini.encoding=UTF-8
+          path=$AVD
+          path.rel=avd/Android23.avd
+          target=android-10
+          EOF
 
-          echo "=== AVDs ==="
-          emulator -list-avds
-
-          test -d "$HOME/.android/avd/Android23.avd"
-          test -f "$HOME/.android/avd/Android23.ini"
-
-      - name: Configurar AVD
-        run: |
-          AVD="$HOME/.android/avd/Android23.avd"
-
-          test -d "$AVD"
-
-          sed -i '/^hw.keyboard=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.mainKeys=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.audioInput=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.audioOutput=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.lcd.width=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.lcd.height=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.lcd.density=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.ramSize=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.cpu.ncore=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.gpu.enabled=/d' "$AVD/config.ini" || true
-          sed -i '/^hw.gpu.mode=/d' "$AVD/config.ini" || true
-
-          cat >> "$AVD/config.ini" <<'EOF'
+            cat > "$AVD/config.ini" <<EOF
+          AvdId=Android23
+          avd.ini.displayname=Android23
+          avd.ini.encoding=UTF-8
+          PlayStore.enabled=false
+          abi.type=x86
+          hw.cpu.arch=x86
+          hw.cpu.ncore=2
+          hw.ramSize=1024
+          hw.heapSize=128
           hw.keyboard=yes
           hw.mainKeys=yes
+          hw.dPad=no
+          hw.gps=yes
           hw.audioInput=no
           hw.audioOutput=no
           hw.lcd.width=800
           hw.lcd.height=600
           hw.lcd.density=160
-          hw.ramSize=1024
-          hw.cpu.ncore=2
-          hw.gpu.enabled=yes
-          hw.gpu.mode=swiftshader_indirect
+          hw.sdCard=yes
+          hw.sensors.orientation=yes
+          hw.sensors.proximity=yes
+          disk.dataPartition.size=2048M
+          image.sysdir.1=system-images/android-10/default/x86/
+          runtime.network.latency=none
+          runtime.network.speed=full
+          showDeviceFrame=no
+          skin.dynamic=no
+          skin.name=800x600
+          tag.display=default
+          vm.heapSize=128
           EOF
 
-          echo "=== CONFIG ==="
+          fi
+
+          echo "=== Android23.ini ==="
+          cat "$HOME/.android/avd/Android23.ini"
+
+          echo "=== config.ini ==="
           cat "$AVD/config.ini"
 
-      - name: Salvar cache do AVD
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.android/avd
-            ~/.android/adb*
-          key: android23-api10-avd-v1-${{ runner.os }}-${{ github.run_id }}
+          echo "=== AVD ==="
+          ls -lah "$AVD"
+
+          test -f "$HOME/.android/avd/Android23.ini"
+          test -f "$AVD/config.ini"
 
       - name: Iniciar Xvfb
         run: |
@@ -223,7 +228,10 @@ jobs:
         run: |
           export DISPLAY=:99
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/android-sdk"
+
+          export PATH="$JAVA_HOME/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
 
           emulator \
             -avd Android23 \
@@ -245,14 +253,18 @@ jobs:
             exit 1
           fi
 
+          echo "Emulador está rodando."
+
           adb wait-for-device
 
           echo "=== ANDROID ==="
-          adb shell getprop ro.build.version.release
-          adb shell getprop ro.build.version.sdk
-          adb shell getprop ro.product.cpu.abi
+
+          adb shell getprop ro.build.version.release || true
+          adb shell getprop ro.build.version.sdk || true
+          adb shell getprop ro.product.cpu.abi || true
 
           echo "=== ADB ==="
+
           adb devices
 
       - name: Iniciar VNC
@@ -278,7 +290,7 @@ jobs:
             exit 1
           fi
 
-          echo "=== VNC ==="
+          echo "=== PORTA VNC ==="
           ss -lntp | grep 5901 || true
 
       - name: Instalar Bore
@@ -297,7 +309,7 @@ jobs:
 
           bore --version
 
-      - name: Expor VNC pelo Bore
+      - name: Expor VNC
         run: |
           bore local 5901 \
             --to bore.pub \
