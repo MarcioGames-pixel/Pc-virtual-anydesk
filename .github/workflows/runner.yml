@@ -25,18 +25,31 @@ jobs:
             echo "KVM não disponível"
             exit 1
           fi
+
           sudo chmod 666 /dev/kvm
 
-      - name: Iniciar PulseAudio
+      - name: Configurar PulseAudio
         run: |
+          export XDG_RUNTIME_DIR=/tmp/runtime-runner
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+
           pulseaudio --kill || true
+
           pulseaudio \
             --daemonize=yes \
-            --exit-idle-time=-1 \
             --system=false \
-            --disallow-exit
-          sleep 3
+            --exit-idle-time=-1 \
+            --load="module-native-protocol-tcp auth-anonymous=1" \
+            --load="module-null-sink sink_name=qemu_sink" \
+            --log-target=stderr
+
+          sleep 5
+
+          export PULSE_SERVER=127.0.0.1
+
           pactl info
+          pactl list short sinks
 
       - name: Baixar Android-x86 4.3
         run: |
@@ -45,27 +58,29 @@ jobs:
 
       - name: Criar QCOW2
         run: |
-          qemu-img create -f qcow2 android43.qcow2 20G
+          qemu-img create \
+            -f qcow2 \
+            android43.qcow2 \
+            20G
 
       - name: Iniciar Android-x86
         run: |
           export PULSE_SERVER=127.0.0.1
-          export QEMU_AUDIO_DRV=pa
 
-          nohup qemu-system-x86_64 \
+          nohup qemu-system-i386 \
             -M pc,acpi=on \
-            -cpu host \
+            -cpu core2duo \
             -accel kvm \
-            -smp 4 \
+            -smp 2 \
             -m 2048M \
-            -device qemu-xhci \
+            -device usb-ehci \
             -device usb-tablet \
             -device usb-kbd \
             -vga vmware \
-            -audiodev pa,id=audio0,server=127.0.0.1,out.mixing-engine=on,out.fixed-settings=on \
-            -device ES1370,audiodev=audio0 \
             -device rtl8139,netdev=net0 \
             -netdev user,id=net0,dns=8.8.8.8,hostfwd=tcp::5555-:5555 \
+            -audiodev pa,id=audio0,server=127.0.0.1 \
+            -device ES1370,audiodev=audio0 \
             -drive file=android43.qcow2,format=qcow2 \
             -cdrom android-x86-4.3.iso \
             -boot d \
@@ -75,8 +90,16 @@ jobs:
             > qemu.log 2>&1 &
 
           echo $! > qemu.pid
+
           sleep 10
+
+          echo "===== QEMU LOG ====="
           cat qemu.log || true
+
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "QEMU encerrou inesperadamente"
+            exit 1
+          fi
 
       - name: Instalar Bore
         run: |
@@ -84,6 +107,7 @@ jobs:
             https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
 
           tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+
           chmod +x bore
 
       - name: Abrir ADB e VNC
@@ -108,34 +132,40 @@ jobs:
           echo "===== VNC ====="
           cat vnc-bore.log || true
 
-      - name: Aguardar instalação
-        run: |
           echo "ADB: bore.pub:5555"
           echo "VNC: bore.pub:5901"
+
+      - name: Aguardar instalação
+        run: |
           sleep 600
 
-      - name: Desligar QEMU
+      - name: Desligar
         if: always()
         run: |
-          killall qemu-system-x86_64 || true
+          killall qemu-system-i386 || true
           killall bore || true
+          pulseaudio --kill || true
 
       - name: Verificar QCOW2
         if: always()
         run: |
-          qemu-img check android43.qcow2 || true
-          qemu-img info android43.qcow2
+          if [ -f android43.qcow2 ]; then
+            qemu-img check android43.qcow2 || true
+            qemu-img info android43.qcow2
+          fi
 
       - name: Compactar QCOW2
         if: always()
         run: |
-          qemu-img convert \
-            -O qcow2 \
-            -c \
-            android43.qcow2 \
-            android43-installed-20GB.qcow2
+          if [ -f android43.qcow2 ]; then
+            qemu-img convert \
+              -O qcow2 \
+              -c \
+              android43.qcow2 \
+              android43-installed-20GB.qcow2
 
-          ls -lh android43-installed-20GB.qcow2
+            ls -lh android43-installed-20GB.qcow2
+          fi
 
       - name: Publicar QCOW2
         if: always()
