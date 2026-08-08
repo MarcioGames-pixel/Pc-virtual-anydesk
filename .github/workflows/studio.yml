@@ -1,4 +1,4 @@
-name: Android 2.3 Emulator VNC Bore
+name: Android 2.3 VNC Bore Persistent AVD
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            openjdk-17-jdk \
             wget \
             unzip \
             curl \
@@ -29,6 +30,11 @@ jobs:
             libxtst6 \
             libglu1-mesa
 
+          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+          sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
+
+          java -version
+
       - name: Instalar Android SDK
         run: |
           mkdir -p "$HOME/android-sdk/cmdline-tools"
@@ -39,63 +45,117 @@ jobs:
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -O sdk.zip
 
-          unzip -q sdk.zip -d "$HOME/android-sdk/cmdline-tools"
+          unzip -q sdk.zip \
+            -d "$HOME/android-sdk/cmdline-tools"
 
-          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" \
-             "$HOME/android-sdk/cmdline-tools/latest"
+          mv \
+            "$HOME/android-sdk/cmdline-tools/cmdline-tools" \
+            "$HOME/android-sdk/cmdline-tools/latest"
 
           echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
+
+      - name: Verificar SDK
+        run: |
+          java -version
+          sdkmanager --version
 
       - name: Aceitar licenças
         run: |
           yes | sdkmanager --licenses || true
 
-      - name: Instalar componentes
+      - name: Instalar ferramentas
         run: |
           sdkmanager \
             "platform-tools" \
-            "emulator" \
-            "platforms;android-10"
+            "emulator"
 
-      - name: Procurar imagens Android antigas
+      - name: Verificar imagem Android 2.3
         run: |
-          sdkmanager --list | grep -E \
-            "system-images;android-(9|10)" \
+          sdkmanager --list \
+            | grep "system-images;android-10" \
             | head -30 || true
 
       - name: Instalar imagem Android 2.3
         run: |
           yes | sdkmanager \
-            "system-images;android-10;default;x86" \
-            || yes | sdkmanager \
-            "system-images;android-10;default;x86_64"
+            "system-images;android-10;default;x86"
 
-      - name: Criar AVD
+      - name: Restaurar cache do AVD
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/avd
+            ~/.android/adb*
+          key: android23-avd-v1-${{ runner.os }}
+
+      - name: Criar AVD se necessário
         run: |
-          echo "no" | avdmanager create avd \
-            -n Android23 \
-            -k "system-images;android-10;default;x86" \
-            --force \
-            || true
+          mkdir -p "$HOME/.android/avd"
+
+          if [ -f "$HOME/.android/avd/Android23.ini" ] && \
+             [ -d "$HOME/.android/avd/Android23.avd" ]; then
+
+            echo "AVD restaurado do cache."
+
+          else
+
+            echo "Criando AVD novo."
+
+            echo "no" | avdmanager create avd \
+              -n Android23 \
+              -k "system-images;android-10;default;x86" \
+              --force
+
+          fi
 
           emulator -list-avds
 
-      - name: Iniciar servidor gráfico
+      - name: Configurar AVD
+        run: |
+          AVD="$HOME/.android/avd/Android23.avd"
+
+          cat >> "$AVD/config.ini" <<'EOF'
+          hw.keyboard=yes
+          hw.mainKeys=yes
+          hw.audioInput=no
+          hw.audioOutput=no
+          hw.lcd.width=800
+          hw.lcd.height=600
+          hw.lcd.density=160
+          hw.ramSize=1024
+          hw.cpu.ncore=2
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          EOF
+
+      - name: Iniciar Xvfb
         run: |
           export DISPLAY=:99
 
           Xvfb :99 \
             -screen 0 800x600x24 \
             -ac \
+            +extension RANDR \
             > xvfb.log 2>&1 &
 
           echo $! > xvfb.pid
 
+          sleep 3
+
+      - name: Iniciar Fluxbox
+        run: |
+          export DISPLAY=:99
+
           fluxbox \
             > fluxbox.log 2>&1 &
+
+          echo $! > fluxbox.pid
 
           sleep 3
 
@@ -108,7 +168,6 @@ jobs:
             -no-audio \
             -no-boot-anim \
             -no-snapshot \
-            -no-window \
             -gpu swiftshader_indirect \
             -memory 1024 \
             -cores 2 \
@@ -126,7 +185,7 @@ jobs:
 
           adb wait-for-device
 
-          echo "Android conectado:"
+          echo "ADB:"
           adb devices
 
       - name: Iniciar VNC
@@ -139,6 +198,7 @@ jobs:
             -shared \
             -rfbport 5901 \
             -nopw \
+            -xkb \
             > vnc.log 2>&1 &
 
           echo $! > vnc.pid
@@ -149,14 +209,12 @@ jobs:
 
       - name: Instalar Bore
         run: |
-          curl -fL \
+          curl -fL --retry 5 --retry-delay 3 \
             https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz \
             -o bore.tar.gz
 
           tar -xzf bore.tar.gz
-
           chmod +x bore
-
           sudo mv bore /usr/local/bin/bore
 
           bore --version
@@ -172,6 +230,12 @@ jobs:
 
           sleep 10
 
+          if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+            echo "Bore encerrou."
+            cat bore.log
+            exit 1
+          fi
+
           echo "======================================"
           echo "ANDROID 2.3"
           echo "VNC: bore.pub:5901"
@@ -179,9 +243,16 @@ jobs:
 
           cat bore.log
 
-      - name: Manter em execução
+      - name: Verificar estado do Android
+        run: |
+          adb shell getprop ro.build.version.release || true
+          adb shell getprop ro.build.version.sdk || true
+          adb shell getprop ro.product.model || true
+
+      - name: Manter execução
         run: |
           while true; do
+
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               echo "Emulador encerrou."
               cat emulator.log
@@ -203,11 +274,20 @@ jobs:
             sleep 10
           done
 
+      - name: Salvar AVD
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.android/avd
+            ~/.android/adb*
+          key: android23-avd-v1-${{ runner.os }}-${{ github.run_id }}
+
       - name: Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Android-23-logs
+          name: Android-2.3-logs
           path: |
             emulator.log
             vnc.log
