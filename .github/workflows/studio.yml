@@ -1,4 +1,4 @@
-name: Android 2.3 VNC Bore Cache
+name: Android 2.3.3 VNC Bore Cache
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
       - name: Instalar dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             openjdk-17-jdk \
             wget \
             unzip \
@@ -69,15 +69,12 @@ jobs:
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
 
-      - name: Verificar SDK Manager
+      - name: Verificar SDK
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
-          which java
           java -version
-
-          which sdkmanager
           sdkmanager --version
 
       - name: Aceitar licenças
@@ -96,25 +93,25 @@ jobs:
             "platform-tools" \
             "emulator"
 
-      - name: Instalar imagem Android 2.3
+      - name: Instalar Android 2.3 API 10
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
           yes | sdkmanager \
-            "system-images;android-9;default;x86"
+            "system-images;android-10;default;x86"
 
           test -d \
-            "$HOME/android-sdk/system-images/android-9/default/x86"
+            "$HOME/android-sdk/system-images/android-10/default/x86"
 
       - name: Restaurar cache do AVD
-        id: cache-avd
+        id: avd-cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.android/avd
             ~/.android/adb*
-          key: android23-avd-v3-${{ runner.os }}
+          key: android23-api10-avd-v1-${{ runner.os }}
 
       - name: Criar AVD sem hardware profile
         run: |
@@ -126,30 +123,24 @@ jobs:
           if [ -d "$HOME/.android/avd/Android23.avd" ] &&
              [ -f "$HOME/.android/avd/Android23.ini" ]; then
 
-            echo "AVD restaurado do cache."
+            echo "AVD encontrado no cache."
 
           else
 
-            echo "AVD não encontrado."
-            echo "Criando sem hardware profile..."
+            echo "Criando AVD..."
 
             rm -rf "$HOME/.android/avd/Android23.avd"
             rm -f "$HOME/.android/avd/Android23.ini"
 
             printf "no\n" | avdmanager create avd \
               --name Android23 \
-              --package "system-images;android-9;default;x86" \
+              --package "system-images;android-10;default;x86" \
               --force
 
           fi
 
           echo "=== AVDs ==="
           emulator -list-avds
-
-          echo "=== ARQUIVOS ==="
-          find "$HOME/.android/avd" \
-            -maxdepth 2 \
-            -print
 
           test -d "$HOME/.android/avd/Android23.avd"
           test -f "$HOME/.android/avd/Android23.ini"
@@ -159,6 +150,18 @@ jobs:
           AVD="$HOME/.android/avd/Android23.avd"
 
           test -d "$AVD"
+
+          sed -i '/^hw.keyboard=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.mainKeys=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.audioInput=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.audioOutput=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.lcd.width=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.lcd.height=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.lcd.density=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.ramSize=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.cpu.ncore=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.gpu.enabled=/d' "$AVD/config.ini" || true
+          sed -i '/^hw.gpu.mode=/d' "$AVD/config.ini" || true
 
           cat >> "$AVD/config.ini" <<'EOF'
           hw.keyboard=yes
@@ -172,12 +175,19 @@ jobs:
           hw.cpu.ncore=2
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
-          hw.sdCard=yes
-          disk.dataPartition.size=2048M
           EOF
 
           echo "=== CONFIG ==="
           cat "$AVD/config.ini"
+
+      - name: Salvar cache do AVD
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.android/avd
+            ~/.android/adb*
+          key: android23-api10-avd-v1-${{ runner.os }}-${{ github.run_id }}
 
       - name: Iniciar Xvfb
         run: |
@@ -212,9 +222,7 @@ jobs:
       - name: Iniciar Android 2.3
         run: |
           export DISPLAY=:99
-
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
 
           emulator \
@@ -240,13 +248,11 @@ jobs:
           adb wait-for-device
 
           echo "=== ANDROID ==="
-
-          adb shell getprop ro.build.version.release || true
-          adb shell getprop ro.build.version.sdk || true
-          adb shell getprop ro.product.cpu.abi || true
+          adb shell getprop ro.build.version.release
+          adb shell getprop ro.build.version.sdk
+          adb shell getprop ro.product.cpu.abi
 
           echo "=== ADB ==="
-
           adb devices
 
       - name: Iniciar VNC
@@ -273,7 +279,6 @@ jobs:
           fi
 
           echo "=== VNC ==="
-
           ss -lntp | grep 5901 || true
 
       - name: Instalar Bore
@@ -292,7 +297,7 @@ jobs:
 
           bore --version
 
-      - name: Expor VNC
+      - name: Expor VNC pelo Bore
         run: |
           bore local 5901 \
             --to bore.pub \
@@ -309,11 +314,11 @@ jobs:
             exit 1
           fi
 
-          echo "========================================"
-          echo "ANDROID 2.3"
-          echo "========================================"
+          echo "======================================"
+          echo "ANDROID 2.3 API 10"
+          echo "======================================"
           echo "VNC: bore.pub:5901"
-          echo "========================================"
+          echo "======================================"
 
           cat bore.log
 
@@ -346,7 +351,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Android-2.3-logs
+          name: Android-2.3-api10-logs
           path: |
             emulator.log
             vnc.log
