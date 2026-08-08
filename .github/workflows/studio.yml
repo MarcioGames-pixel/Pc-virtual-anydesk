@@ -1,0 +1,217 @@
+name: Android 2.3 Emulator VNC Bore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  android23:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            wget \
+            unzip \
+            curl \
+            xvfb \
+            x11vnc \
+            fluxbox \
+            libpulse0 \
+            libnss3 \
+            libx11-6 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxi6 \
+            libxrandr2 \
+            libxtst6 \
+            libglu1-mesa
+
+      - name: Instalar Android SDK
+        run: |
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+
+          cd /tmp
+
+          wget -q \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -O sdk.zip
+
+          unzip -q sdk.zip -d "$HOME/android-sdk/cmdline-tools"
+
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" \
+             "$HOME/android-sdk/cmdline-tools/latest"
+
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
+          echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
+
+      - name: Aceitar licenças
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: Instalar componentes
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-10"
+
+      - name: Procurar imagens Android antigas
+        run: |
+          sdkmanager --list | grep -E \
+            "system-images;android-(9|10)" \
+            | head -30 || true
+
+      - name: Instalar imagem Android 2.3
+        run: |
+          yes | sdkmanager \
+            "system-images;android-10;default;x86" \
+            || yes | sdkmanager \
+            "system-images;android-10;default;x86_64"
+
+      - name: Criar AVD
+        run: |
+          echo "no" | avdmanager create avd \
+            -n Android23 \
+            -k "system-images;android-10;default;x86" \
+            --force \
+            || true
+
+          emulator -list-avds
+
+      - name: Iniciar servidor gráfico
+        run: |
+          export DISPLAY=:99
+
+          Xvfb :99 \
+            -screen 0 800x600x24 \
+            -ac \
+            > xvfb.log 2>&1 &
+
+          echo $! > xvfb.pid
+
+          fluxbox \
+            > fluxbox.log 2>&1 &
+
+          sleep 3
+
+      - name: Iniciar Android 2.3
+        run: |
+          export DISPLAY=:99
+
+          emulator \
+            -avd Android23 \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -memory 1024 \
+            -cores 2 \
+            > emulator.log 2>&1 &
+
+          echo $! > emulator.pid
+
+          sleep 30
+
+          if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+            echo "Emulador encerrou."
+            cat emulator.log
+            exit 1
+          fi
+
+          adb wait-for-device
+
+          echo "Android conectado:"
+          adb devices
+
+      - name: Iniciar VNC
+        run: |
+          export DISPLAY=:99
+
+          x11vnc \
+            -display :99 \
+            -forever \
+            -shared \
+            -rfbport 5901 \
+            -nopw \
+            > vnc.log 2>&1 &
+
+          echo $! > vnc.pid
+
+          sleep 5
+
+          ss -lntp | grep 5901 || true
+
+      - name: Instalar Bore
+        run: |
+          curl -fL \
+            https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz \
+            -o bore.tar.gz
+
+          tar -xzf bore.tar.gz
+
+          chmod +x bore
+
+          sudo mv bore /usr/local/bin/bore
+
+          bore --version
+
+      - name: Expor VNC
+        run: |
+          bore local 5901 \
+            --to bore.pub \
+            --port 5901 \
+            > bore.log 2>&1 &
+
+          echo $! > bore.pid
+
+          sleep 10
+
+          echo "======================================"
+          echo "ANDROID 2.3"
+          echo "VNC: bore.pub:5901"
+          echo "======================================"
+
+          cat bore.log
+
+      - name: Manter em execução
+        run: |
+          while true; do
+            if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+              echo "Emulador encerrou."
+              cat emulator.log
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat vnc.pid)" 2>/dev/null; then
+              echo "VNC encerrou."
+              cat vnc.log
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+              echo "Bore encerrou."
+              cat bore.log
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-23-logs
+          path: |
+            emulator.log
+            vnc.log
+            bore.log
+            xvfb.log
+            fluxbox.log
+          retention-days: 7
