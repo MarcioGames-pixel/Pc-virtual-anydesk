@@ -96,60 +96,60 @@ jobs:
             "platform-tools" \
             "emulator"
 
-      - name: Verificar Android 2.3
-        run: |
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
-
-          sdkmanager --list |
-            grep "system-images;android-10" |
-            head -30 || true
-
       - name: Instalar imagem Android 2.3
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
 
           yes | sdkmanager \
-            "system-images;android-10;default;x86"
+            "system-images;android-9;default;x86"
+
+          test -d \
+            "$HOME/android-sdk/system-images/android-9/default/x86"
 
       - name: Restaurar cache do AVD
-        id: avd-cache
+        id: cache-avd
         uses: actions/cache@v4
         with:
           path: |
             ~/.android/avd
             ~/.android/adb*
-          key: android23-avd-v1-${{ runner.os }}
+          key: android23-avd-v3-${{ runner.os }}
 
-      - name: Criar AVD
+      - name: Criar AVD sem hardware profile
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
 
           mkdir -p "$HOME/.android/avd"
 
-          if [ -f "$HOME/.android/avd/Android23.ini" ] &&
-             [ -d "$HOME/.android/avd/Android23.avd" ]; then
+          if [ -d "$HOME/.android/avd/Android23.avd" ] &&
+             [ -f "$HOME/.android/avd/Android23.ini" ]; then
 
-            echo "AVD encontrado no cache."
+            echo "AVD restaurado do cache."
 
           else
 
-            echo "AVD não encontrado. Criando..."
+            echo "AVD não encontrado."
+            echo "Criando sem hardware profile..."
 
             rm -rf "$HOME/.android/avd/Android23.avd"
             rm -f "$HOME/.android/avd/Android23.ini"
 
-            echo "no" | avdmanager create avd \
-              -n Android23 \
-              -k "system-images;android-10;default;x86" \
+            printf "no\n" | avdmanager create avd \
+              --name Android23 \
+              --package "system-images;android-9;default;x86" \
               --force
 
           fi
 
-          echo "AVDs:"
+          echo "=== AVDs ==="
           emulator -list-avds
+
+          echo "=== ARQUIVOS ==="
+          find "$HOME/.android/avd" \
+            -maxdepth 2 \
+            -print
 
           test -d "$HOME/.android/avd/Android23.avd"
           test -f "$HOME/.android/avd/Android23.ini"
@@ -159,22 +159,6 @@ jobs:
           AVD="$HOME/.android/avd/Android23.avd"
 
           test -d "$AVD"
-
-          if [ ! -f "$AVD/config.ini" ]; then
-            touch "$AVD/config.ini"
-          fi
-
-          sed -i '/^hw.keyboard=/d' "$AVD/config.ini"
-          sed -i '/^hw.mainKeys=/d' "$AVD/config.ini"
-          sed -i '/^hw.audioInput=/d' "$AVD/config.ini"
-          sed -i '/^hw.audioOutput=/d' "$AVD/config.ini"
-          sed -i '/^hw.lcd.width=/d' "$AVD/config.ini"
-          sed -i '/^hw.lcd.height=/d' "$AVD/config.ini"
-          sed -i '/^hw.lcd.density=/d' "$AVD/config.ini"
-          sed -i '/^hw.ramSize=/d' "$AVD/config.ini"
-          sed -i '/^hw.cpu.ncore=/d' "$AVD/config.ini"
-          sed -i '/^hw.gpu.enabled=/d' "$AVD/config.ini"
-          sed -i '/^hw.gpu.mode=/d' "$AVD/config.ini"
 
           cat >> "$AVD/config.ini" <<'EOF'
           hw.keyboard=yes
@@ -188,9 +172,11 @@ jobs:
           hw.cpu.ncore=2
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
+          hw.sdCard=yes
+          disk.dataPartition.size=2048M
           EOF
 
-          echo "=== AVD CONFIG ==="
+          echo "=== CONFIG ==="
           cat "$AVD/config.ini"
 
       - name: Iniciar Xvfb
@@ -226,17 +212,19 @@ jobs:
       - name: Iniciar Android 2.3
         run: |
           export DISPLAY=:99
+
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/emulator:$HOME/android-sdk/platform-tools:$PATH"
 
           emulator \
             -avd Android23 \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
             -gpu swiftshader_indirect \
             -memory 1024 \
             -cores 2 \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
             > emulator.log 2>&1 &
 
           echo $! > emulator.pid
@@ -251,7 +239,14 @@ jobs:
 
           adb wait-for-device
 
+          echo "=== ANDROID ==="
+
+          adb shell getprop ro.build.version.release || true
+          adb shell getprop ro.build.version.sdk || true
+          adb shell getprop ro.product.cpu.abi || true
+
           echo "=== ADB ==="
+
           adb devices
 
       - name: Iniciar VNC
@@ -260,9 +255,9 @@ jobs:
 
           x11vnc \
             -display :99 \
+            -rfbport 5901 \
             -forever \
             -shared \
-            -rfbport 5901 \
             -nopw \
             -xkb \
             > vnc.log 2>&1 &
@@ -278,16 +273,21 @@ jobs:
           fi
 
           echo "=== VNC ==="
+
           ss -lntp | grep 5901 || true
 
       - name: Instalar Bore
         run: |
-          curl -fL --retry 5 --retry-delay 3 \
+          curl -fL \
+            --retry 5 \
+            --retry-delay 3 \
             https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz \
             -o bore.tar.gz
 
           tar -xzf bore.tar.gz
+
           chmod +x bore
+
           sudo mv bore /usr/local/bin/bore
 
           bore --version
@@ -309,23 +309,17 @@ jobs:
             exit 1
           fi
 
-          echo "======================================"
+          echo "========================================"
           echo "ANDROID 2.3"
-          echo "======================================"
+          echo "========================================"
           echo "VNC: bore.pub:5901"
-          echo "======================================"
+          echo "========================================"
 
           cat bore.log
 
-      - name: Verificar Android
-        run: |
-          adb shell getprop ro.build.version.release || true
-          adb shell getprop ro.build.version.sdk || true
-          adb shell getprop ro.product.model || true
-
       - name: Manter execução
         run: |
-          while true; do
+          for i in $(seq 1 540); do
 
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               echo "Emulador encerrou."
