@@ -260,7 +260,7 @@ jobs:
 
           echo "QEMU PID: $QEMU_PID"
 
-          sleep 20
+          sleep 3
 
           if ! kill -0 "$QEMU_PID" 2>/dev/null; then
             echo "======================================"
@@ -294,7 +294,7 @@ jobs:
 
           echo "$BORE_PID" > bore.pid
 
-          sleep 10
+          sleep 2
 
           echo
           echo "======================================"
