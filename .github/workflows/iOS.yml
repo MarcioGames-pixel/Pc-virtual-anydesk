@@ -27,6 +27,15 @@ jobs:
             libglib2.0-dev \
             libslirp-dev \
             libslirp0 \
+            libzstd-dev \
+            libcap-ng-dev \
+            libattr1-dev \
+            libaio-dev \
+            liburing-dev \
+            libseccomp-dev \
+            libfdt-dev \
+            libusb-1.0-0-dev \
+            libepoxy-dev \
             curl \
             git \
             ca-certificates \
@@ -48,7 +57,7 @@ jobs:
           echo "===== COMMIT ====="
           git rev-parse HEAD
 
-      - name: Compilar QEMU-iOS
+      - name: Configurar QEMU-iOS
         working-directory: qemu-ios
         run: |
           mkdir -p build
@@ -60,18 +69,23 @@ jobs:
             --target-list=arm-softmmu \
             --disable-capstone \
             --disable-slirp \
-            --extra-cflags=-I/usr/include/openssl \
-            --extra-ldflags='-lcrypto' \
-            --disable-werror \
-            --enable-pie
+            --disable-werror
 
-          echo "===== COMPILANDO SOMENTE QEMU ARM ====="
+      - name: Compilar QEMU ARM
+        working-directory: qemu-ios/build
+        run: |
+          echo "======================================"
+          echo "COMPILANDO QEMU-SYSTEM-ARM"
+          echo "======================================"
 
           make -j"$(nproc)" qemu-system-arm
 
+          echo "======================================"
+          echo "COMPILAÇÃO TERMINADA"
+          echo "======================================"
+
           test -x arm-softmmu/qemu-system-arm
 
-          echo "===== QEMU COMPILADO ====="
           ls -lh arm-softmmu/qemu-system-arm
 
       - name: Criar diretório dos arquivos
@@ -133,7 +147,10 @@ jobs:
 
           tar -xzf nand-canonical.tar.gz -C nand
 
-          echo "===== NAND EXTRAÍDA ====="
+          echo "======================================"
+          echo "NAND EXTRAÍDA"
+          echo "======================================"
+
           find nand -maxdepth 3 -type f | head -100
 
           test -d nand
@@ -152,24 +169,23 @@ jobs:
 
           bore --version
 
-      - name: Verificar arquivos
+      - name: Verificar QEMU
         working-directory: ios_files
         run: |
-          echo "======================================"
-          echo "ARQUIVOS DO IPOD TOUCH 2G"
-          echo "======================================"
+          QEMU="../qemu-ios/build/arm-softmmu/qemu-system-arm"
 
-          ls -lah
+          test -x "$QEMU"
+
+          echo "===== QEMU ====="
+          "$QEMU" --version
+
+          echo
+          echo "===== ARQUIVOS ====="
+          ls -lh
 
           echo
           echo "===== NAND ====="
-
           find nand -maxdepth 3 -type f -print
-
-          echo
-          echo "===== QEMU ====="
-
-          ../qemu-ios/build/arm-softmmu/qemu-system-arm --version
 
       - name: Iniciar QEMU-iOS
         working-directory: ios_files
@@ -211,7 +227,6 @@ jobs:
             echo "======================================"
 
             echo "===== QEMU LOG ====="
-
             cat qemu.log
 
             exit 1
@@ -241,8 +256,7 @@ jobs:
           echo "IPOD TOUCH 2G - VNC"
           echo "======================================"
 
-          echo "VNC:"
-          echo "bore.pub:5900"
+          echo "VNC: bore.pub:5900"
 
           echo
           echo "===== BORE LOG ====="
@@ -287,31 +301,24 @@ jobs:
           while true; do
 
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-
               echo "QEMU encerrou."
 
               echo "===== QEMU LOG ====="
-
               cat qemu.log
 
               exit 1
-
             fi
 
             if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
-
               echo "Bore encerrou."
 
               echo "===== BORE LOG ====="
-
               cat bore.log
 
               exit 1
-
             fi
 
             sleep 10
-
           done
 
       - name: Logs
