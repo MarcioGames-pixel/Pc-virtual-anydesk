@@ -15,7 +15,6 @@ jobs:
       - name: Instalar dependências
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             build-essential \
             ninja-build \
@@ -34,20 +33,20 @@ jobs:
             xz-utils \
             tar
 
-      - name: Baixar QEMU-iOS release 2026.08
+      - name: Clonar QEMU-iOS
         run: |
           git clone \
             --depth 1 \
             --branch ipod_touch_2g \
-            https://github.com/devos50/qemu-ios.git
+            https://github.com/samhenrigold/qemu-ios.git
 
           cd qemu-ios
 
-          echo "Commit:"
-          git rev-parse HEAD
-
           echo "Branch:"
           git branch --show-current
+
+          echo "Commit:"
+          git rev-parse HEAD
 
       - name: Compilar QEMU-iOS
         working-directory: qemu-ios
@@ -70,9 +69,6 @@ jobs:
 
           test -x arm-softmmu/qemu-system-arm
 
-          echo "QEMU compilado:"
-          ls -lh arm-softmmu/qemu-system-arm
-
       - name: Criar diretório dos arquivos
         run: |
           mkdir -p ios_files
@@ -82,35 +78,43 @@ jobs:
         run: |
           curl -fL --retry 5 --retry-delay 3 \
             -o bootrom_240_4 \
-            https://github.com/devos50/qemu-ios/releases/download/ipod-touch-2g-2026.08/bootrom_240_4
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/bootrom_240_4
 
           test -s bootrom_240_4
 
-          echo "BootROM:"
           ls -lh bootrom_240_4
 
-      - name: Baixar NOR iOS 3.1.3
+      - name: Baixar iBoot
+        working-directory: ios_files
+        run: |
+          curl -fL --retry 5 --retry-delay 3 \
+            -o iBoot.bin \
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/iBoot.bin
+
+          test -s iBoot.bin
+
+          ls -lh iBoot.bin
+
+      - name: Baixar NOR
         working-directory: ios_files
         run: |
           curl -fL --retry 5 --retry-delay 3 \
             -o nor_7E18.bin \
-            https://github.com/devos50/qemu-ios/releases/download/ipod-touch-2g-2026.08/nor_7E18.bin
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nor_7E18.bin
 
           test -s nor_7E18.bin
 
-          echo "NOR:"
           ls -lh nor_7E18.bin
 
-      - name: Baixar NAND canonical
+      - name: Baixar NAND
         working-directory: ios_files
         run: |
           curl -fL --retry 5 --retry-delay 3 \
             -o nand-canonical.tar.gz \
-            https://github.com/devos50/qemu-ios/releases/download/ipod-touch-2g-2026.08/nand-canonical.tar.gz
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nand-canonical.tar.gz
 
           test -s nand-canonical.tar.gz
 
-          echo "NAND:"
           ls -lh nand-canonical.tar.gz
 
       - name: Extrair NAND
@@ -118,11 +122,9 @@ jobs:
         run: |
           mkdir -p nand
 
-          tar -xzf nand-canonical.tar.gz \
-            -C nand \
-            --strip-components=0
+          tar -xzf nand-canonical.tar.gz -C nand
 
-          echo "Estrutura da NAND:"
+          echo "Arquivos NAND:"
           find nand -maxdepth 3 -type f | head -100
 
           test -d nand
@@ -134,9 +136,7 @@ jobs:
             https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
 
           tar -xzf bore.tar.gz
-
           chmod +x bore
-
           sudo mv bore /usr/local/bin/bore
 
           bore --version
@@ -145,19 +145,15 @@ jobs:
         working-directory: ios_files
         run: |
           echo "===== ARQUIVOS ====="
-
           ls -lah
 
           echo
           echo "===== NAND ====="
-
           find nand -maxdepth 3 -type f -print
 
           echo
           echo "===== QEMU ====="
-
-          ../qemu-ios/build/arm-softmmu/qemu-system-arm \
-            --version
+          ../qemu-ios/build/arm-softmmu/qemu-system-arm --version
 
       - name: Iniciar QEMU-iOS
         working-directory: ios_files
@@ -166,13 +162,9 @@ jobs:
 
           test -x "$QEMU"
           test -f bootrom_240_4
+          test -f iBoot.bin
           test -f nor_7E18.bin
           test -d nand
-
-          echo "======================================"
-          echo "INICIANDO IPOD TOUCH 2G"
-          echo "iOS 3.1.3 / 7E18"
-          echo "======================================"
 
           "$QEMU" \
             -M iPod-Touch,bootrom=bootrom_240_4,nand=nand,nor=nor_7E18.bin \
@@ -187,28 +179,23 @@ jobs:
 
           echo "$QEMU_PID" > qemu.pid
 
-          echo "PID: $QEMU_PID"
-
           sleep 20
 
           if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-            echo "QEMU encerrou durante a inicialização."
+            echo "QEMU encerrou."
 
-            echo
             echo "===== QEMU LOG ====="
             cat qemu.log
 
             exit 1
           fi
 
-          echo
-          echo "QEMU está executando."
+          echo "QEMU executando."
+          echo "PID: $QEMU_PID"
 
       - name: Abrir VNC pelo Bore
         working-directory: ios_files
         run: |
-          echo "Iniciando Bore..."
-
           bore local 5900 \
             --to bore.pub \
             --port 5900 \
@@ -220,35 +207,23 @@ jobs:
 
           sleep 10
 
-          echo
           echo "======================================"
-          echo "          IPOD TOUCH 2G VNC"
+          echo "IPOD TOUCH 2G"
+          echo "iOS 3.1.3"
           echo "======================================"
-          echo
-          echo "Servidor:"
-          echo "bore.pub:5900"
-          echo
-          echo "Bore:"
-          cat bore.log
-          echo
+          echo "VNC: bore.pub:5900"
           echo "======================================"
 
-      - name: Verificar QEMU e Bore
+          cat bore.log
+
+      - name: Verificar processos
         working-directory: ios_files
         run: |
           echo "===== PROCESSOS ====="
           ps aux | grep -E 'qemu-system-arm|bore' | grep -v grep || true
 
           echo
-          echo "===== QEMU PID ====="
-          cat qemu.pid
-
-          echo
-          echo "===== BORE PID ====="
-          cat bore.pid
-
-          echo
-          echo "===== PORTA VNC ====="
+          echo "===== VNC ====="
           ss -lntp | grep ':5900' || true
 
       - name: Manter em execução
@@ -260,29 +235,19 @@ jobs:
           echo "======================================"
 
           while true; do
-
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-              echo
               echo "QEMU encerrou."
-
-              echo "===== QEMU LOG ====="
               cat qemu.log
-
               exit 1
             fi
 
             if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
-              echo
               echo "Bore encerrou."
-
-              echo "===== BORE LOG ====="
               cat bore.log
-
               exit 1
             fi
 
             sleep 10
-
           done
 
       - name: Logs
