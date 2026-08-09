@@ -42,6 +42,13 @@ jobs:
             xz-utils \
             tar
 
+      - name: Verificar OpenSSL
+        run: |
+          openssl version
+          pkg-config --modversion openssl
+          pkg-config --libs openssl
+          ls -lh /usr/lib/x86_64-linux-gnu/libcrypto.so*
+
       - name: Clonar QEMU-iOS
         run: |
           git clone \
@@ -60,8 +67,12 @@ jobs:
       - name: Configurar QEMU-iOS
         working-directory: qemu-ios
         run: |
+          rm -rf build
           mkdir -p build
           cd build
+
+          export CFLAGS="-I/usr/include/openssl"
+          export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -lcrypto"
 
           ../configure \
             --enable-sdl \
@@ -69,7 +80,9 @@ jobs:
             --target-list=arm-softmmu \
             --disable-capstone \
             --disable-slirp \
-            --disable-werror
+            --disable-werror \
+            --extra-cflags="-I/usr/include/openssl" \
+            --extra-ldflags="-L/usr/lib/x86_64-linux-gnu -lcrypto"
 
       - name: Compilar QEMU ARM
         working-directory: qemu-ios/build
@@ -169,22 +182,35 @@ jobs:
 
           bore --version
 
-      - name: Verificar QEMU
+      - name: Verificar QEMU e arquivos
         working-directory: ios_files
         run: |
           QEMU="../qemu-ios/build/arm-softmmu/qemu-system-arm"
 
           test -x "$QEMU"
+          test -f bootrom_240_4
+          test -f iBoot.bin
+          test -f nor_7E18.bin
+          test -d nand
 
-          echo "===== QEMU ====="
+          echo "======================================"
+          echo "QEMU"
+          echo "======================================"
+
           "$QEMU" --version
 
           echo
-          echo "===== ARQUIVOS ====="
+          echo "======================================"
+          echo "ARQUIVOS"
+          echo "======================================"
+
           ls -lh
 
           echo
-          echo "===== NAND ====="
+          echo "======================================"
+          echo "NAND"
+          echo "======================================"
+
           find nand -maxdepth 3 -type f -print
 
       - name: Iniciar QEMU-iOS
@@ -194,7 +220,6 @@ jobs:
 
           test -x "$QEMU"
           test -f bootrom_240_4
-          test -f iBoot.bin
           test -f nor_7E18.bin
           test -d nand
 
