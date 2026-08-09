@@ -1,0 +1,238 @@
+name: Android-x86 4.0 r1 VNC ADB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  android-x86:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+
+      - name: Dependências
+        run: |
+          sudo apt-get update
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            wget \
+            curl \
+            pulseaudio \
+            pulseaudio-utils
+
+      - name: Verificar KVM
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm não existe neste runner."
+            exit 1
+          fi
+
+          sudo chmod 666 /dev/kvm
+
+          echo "=== KVM ==="
+          ls -l /dev/kvm
+
+      - name: Iniciar PulseAudio
+        run: |
+          export XDG_RUNTIME_DIR=/tmp/runtime-runner
+
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+
+          pulseaudio --kill || true
+
+          pulseaudio \
+            --daemonize=yes \
+            --exit-idle-time=-1 \
+            --load="module-native-protocol-tcp auth-anonymous=1"
+
+          sleep 5
+
+          export PULSE_SERVER=127.0.0.1
+
+          pactl info
+
+      - name: Baixar Android-x86 4.0 r1
+        run: |
+          wget -O android40.iso \
+            https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-x86/android-x86-4.0-r1-eeepc.iso
+
+          ls -lh android40.iso
+
+          file android40.iso
+
+      - name: Criar QCOW2
+        run: |
+          qemu-img create \
+            -f qcow2 \
+            android40.qcow2 \
+            20G
+
+          qemu-img info android40.qcow2
+
+      - name: Iniciar QEMU Android 4.0
+        run: |
+          export PULSE_SERVER=127.0.0.1
+
+          nohup qemu-system-i386 \
+            -M pc,acpi=on \
+            -cpu core2duo \
+            -accel kvm \
+            -smp 2 \
+            -m 2048M \
+            -device usb-ehci \
+            -device usb-tablet \
+            -device usb-kbd \
+            -vga vmware \
+            -device rtl8139,netdev=net0 \
+            -netdev user,id=net0,dns=8.8.8.8,hostfwd=tcp::5555-:5555 \
+            -audiodev pa,id=audio0,server=127.0.0.1 \
+            -device ES1370,audiodev=audio0 \
+            -drive file=android40.qcow2,format=qcow2 \
+            -cdrom android40.iso \
+            -boot d \
+            -vnc :1 \
+            -monitor none \
+            -name "Android-x86 4.0 r1 Touch" \
+            > qemu.log 2>&1 &
+
+          echo $! > qemu.pid
+
+          sleep 15
+
+          echo "=== QEMU LOG ==="
+          cat qemu.log
+
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "QEMU encerrou."
+            exit 1
+          fi
+
+          echo "QEMU está rodando."
+
+      - name: Instalar Bore
+        run: |
+          wget -q \
+            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz \
+            -O bore.tar.gz
+
+          tar -xzf bore.tar.gz
+
+          chmod +x bore
+
+          ./bore --version
+
+      - name: Expor ADB 5555
+        run: |
+          nohup ./bore \
+            local 5555 \
+            --to bore.pub \
+            --port 5555 \
+            > adb-bore.log 2>&1 &
+
+          echo $! > adb-bore.pid
+
+          sleep 3
+
+          if ! kill -0 "$(cat adb-bore.pid)" 2>/dev/null; then
+            echo "Bore ADB encerrou."
+            cat adb-bore.log
+            exit 1
+          fi
+
+      - name: Expor VNC 5901
+        run: |
+          nohup ./bore \
+            local 5901 \
+            --to bore.pub \
+            --port 5901 \
+            > vnc-bore.log 2>&1 &
+
+          echo $! > vnc-bore.pid
+
+          sleep 10
+
+          if ! kill -0 "$(cat vnc-bore.pid)" 2>/dev/null; then
+            echo "Bore VNC encerrou."
+            cat vnc-bore.log
+            exit 1
+          fi
+
+          echo "========================================"
+          echo "ANDROID-X86 4.0 r1"
+          echo "========================================"
+          echo "ADB: bore.pub:5555"
+          echo "VNC: bore.pub:5901"
+          echo "========================================"
+
+          echo
+          echo "=== ADB BORE ==="
+          cat adb-bore.log
+
+          echo
+          echo "=== VNC BORE ==="
+          cat vnc-bore.log
+
+      - name: Instalação manual
+        run: |
+          echo "Android 4.0 r1 está disponível."
+          echo "VNC: bore.pub:5901"
+          echo "ADB: bore.pub:5555"
+          echo
+          echo "A VM ficará ativa por 10 minutos."
+
+          sleep 600
+
+      - name: Finalizar
+        if: always()
+        run: |
+          kill "$(cat qemu.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat adb-bore.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat vnc-bore.pid 2>/dev/null)" 2>/dev/null || true
+
+          killall qemu-system-i386 2>/dev/null || true
+          killall bore 2>/dev/null || true
+
+          pulseaudio --kill 2>/dev/null || true
+
+      - name: Compactar QCOW2
+        if: always()
+        run: |
+          if [ -f android40.qcow2 ]; then
+
+            echo "Compactando QCOW2..."
+
+            qemu-img convert \
+              -O qcow2 \
+              -c \
+              android40.qcow2 \
+              android40-installed.qcow2
+
+            ls -lh android40*.qcow2
+
+          else
+            echo "QCOW2 não encontrado."
+          fi
+
+      - name: Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-x86-4.0-r1-QCOW2
+          path: android40-installed.qcow2
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-x86-4.0-r1-logs
+          path: |
+            qemu.log
+            adb-bore.log
+            vnc-bore.log
+          if-no-files-found: warn
+          retention-days: 7
