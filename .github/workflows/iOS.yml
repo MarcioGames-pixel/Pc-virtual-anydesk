@@ -27,29 +27,13 @@ jobs:
             libglib2.0-dev \
             libslirp-dev \
             libslirp0 \
-            libzstd-dev \
-            libcap-ng-dev \
-            libattr1-dev \
-            libaio-dev \
-            liburing-dev \
-            libseccomp-dev \
-            libfdt-dev \
-            libusb-1.0-0-dev \
-            libepoxy-dev \
             curl \
             git \
             ca-certificates \
             xz-utils \
             tar
 
-      - name: Verificar OpenSSL
-        run: |
-          openssl version
-          pkg-config --modversion openssl
-          pkg-config --libs openssl
-          ls -lh /usr/lib/x86_64-linux-gnu/libcrypto.so*
-
-      - name: Clonar QEMU-iOS
+      - name: Baixar QEMU-iOS 2026.08
         run: |
           git clone \
             --depth 1 \
@@ -58,21 +42,22 @@ jobs:
 
           cd qemu-ios
 
-          echo "===== BRANCH ====="
+          echo "======================================"
+          echo "QEMU-iOS"
+          echo "======================================"
+
+          echo "Branch:"
           git branch --show-current
 
-          echo "===== COMMIT ====="
+          echo
+          echo "Commit:"
           git rev-parse HEAD
 
-      - name: Configurar QEMU-iOS
+      - name: Compilar QEMU-iOS
         working-directory: qemu-ios
         run: |
-          rm -rf build
           mkdir -p build
           cd build
-
-          export CFLAGS="-I/usr/include/openssl"
-          export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -lcrypto"
 
           ../configure \
             --enable-sdl \
@@ -80,26 +65,27 @@ jobs:
             --target-list=arm-softmmu \
             --disable-capstone \
             --disable-slirp \
+            --extra-cflags=-I/usr/include/openssl \
+            --extra-ldflags='-lcrypto' \
             --disable-werror \
-            --extra-cflags="-I/usr/include/openssl" \
-            --extra-ldflags="-L/usr/lib/x86_64-linux-gnu -lcrypto"
+            --enable-pie
 
-      - name: Compilar QEMU ARM
-        working-directory: qemu-ios/build
-        run: |
           echo "======================================"
-          echo "COMPILANDO QEMU-SYSTEM-ARM"
+          echo "COMPILANDO QEMU"
           echo "======================================"
 
-          make -j"$(nproc)" qemu-system-arm
+          make -j"$(nproc)"
 
           echo "======================================"
           echo "COMPILAÇÃO TERMINADA"
           echo "======================================"
 
-          test -x arm-softmmu/qemu-system-arm
+          echo "===== EXECUTÁVEIS ====="
 
-          ls -lh arm-softmmu/qemu-system-arm
+          find . \
+            -type f \
+            -name "qemu-system-arm" \
+            -ls
 
       - name: Criar diretório dos arquivos
         run: |
@@ -141,7 +127,7 @@ jobs:
           echo "===== NOR ====="
           ls -lh nor_7E18.bin
 
-      - name: Baixar NAND
+      - name: Baixar NAND canonical
         working-directory: ios_files
         run: |
           curl -fL --retry 5 --retry-delay 3 \
@@ -156,6 +142,7 @@ jobs:
       - name: Extrair NAND
         working-directory: ios_files
         run: |
+          rm -rf nand
           mkdir -p nand
 
           tar -xzf nand-canonical.tar.gz -C nand
@@ -164,7 +151,7 @@ jobs:
           echo "NAND EXTRAÍDA"
           echo "======================================"
 
-          find nand -maxdepth 3 -type f | head -100
+          find nand -maxdepth 4 -type f | head -100
 
           test -d nand
 
@@ -182,49 +169,78 @@ jobs:
 
           bore --version
 
-      - name: Verificar QEMU e arquivos
+      - name: Localizar QEMU
+        run: |
+          echo "======================================"
+          echo "PROCURANDO QEMU-SYSTEM-ARM"
+          echo "======================================"
+
+          find qemu-ios/build \
+            -type f \
+            -name "qemu-system-arm" \
+            -ls
+
+          QEMU="$(find "$GITHUB_WORKSPACE/qemu-ios/build" \
+            -type f \
+            -name "qemu-system-arm" \
+            -perm -111 \
+            | head -n 1)"
+
+          if [ -z "$QEMU" ]; then
+            echo "QEMU não encontrado."
+            exit 1
+          fi
+
+          echo "$QEMU" > qemu_path.txt
+
+          echo
+          echo "QEMU encontrado:"
+          cat qemu_path.txt
+
+          echo
+          echo "Versão:"
+          "$QEMU" --version
+
+      - name: Verificar arquivos
         working-directory: ios_files
         run: |
-          QEMU="../qemu-ios/build/arm-softmmu/qemu-system-arm"
+          QEMU="$(cat ../qemu_path.txt)"
+
+          echo "======================================"
+          echo "VERIFICANDO ARQUIVOS"
+          echo "======================================"
 
           test -x "$QEMU"
-          test -f bootrom_240_4
-          test -f iBoot.bin
-          test -f nor_7E18.bin
+          test -s bootrom_240_4
+          test -s iBoot.bin
+          test -s nor_7E18.bin
           test -d nand
 
-          echo "======================================"
-          echo "QEMU"
-          echo "======================================"
-
+          echo
+          echo "===== QEMU ====="
           "$QEMU" --version
 
           echo
-          echo "======================================"
-          echo "ARQUIVOS"
-          echo "======================================"
-
-          ls -lh
+          echo "===== ARQUIVOS ====="
+          ls -lah
 
           echo
-          echo "======================================"
-          echo "NAND"
-          echo "======================================"
-
-          find nand -maxdepth 3 -type f -print
+          echo "===== NAND ====="
+          find nand -maxdepth 4 -type f -print
 
       - name: Iniciar QEMU-iOS
         working-directory: ios_files
         run: |
-          QEMU="../qemu-ios/build/arm-softmmu/qemu-system-arm"
+          QEMU="$(cat ../qemu_path.txt)"
 
           test -x "$QEMU"
-          test -f bootrom_240_4
-          test -f nor_7E18.bin
+          test -s bootrom_240_4
+          test -s nor_7E18.bin
           test -d nand
 
           echo "======================================"
           echo "INICIANDO IPOD TOUCH 2G"
+          echo "======================================"
           echo "iOS 3.1.3"
           echo "Build 7E18"
           echo "======================================"
@@ -251,12 +267,15 @@ jobs:
             echo "QEMU ENCERROU"
             echo "======================================"
 
+            echo
             echo "===== QEMU LOG ====="
+
             cat qemu.log
 
             exit 1
           fi
 
+          echo
           echo "======================================"
           echo "QEMU ESTÁ EXECUTANDO"
           echo "======================================"
@@ -277,11 +296,14 @@ jobs:
 
           sleep 10
 
+          echo
           echo "======================================"
-          echo "IPOD TOUCH 2G - VNC"
+          echo "       IPOD TOUCH 2G - VNC"
           echo "======================================"
 
-          echo "VNC: bore.pub:5900"
+          echo
+          echo "Servidor:"
+          echo "bore.pub:5900"
 
           echo
           echo "===== BORE LOG ====="
@@ -298,11 +320,6 @@ jobs:
             | grep -v grep || true
 
           echo
-          echo "===== PORTA VNC ====="
-
-          ss -lntp | grep ':5900' || true
-
-          echo
           echo "===== QEMU PID ====="
 
           cat qemu.pid
@@ -311,6 +328,11 @@ jobs:
           echo "===== BORE PID ====="
 
           cat bore.pid
+
+          echo
+          echo "===== PORTA VNC ====="
+
+          ss -lntp | grep ':5900' || true
 
       - name: Manter em execução
         working-directory: ios_files
@@ -326,6 +348,7 @@ jobs:
           while true; do
 
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+              echo
               echo "QEMU encerrou."
 
               echo "===== QEMU LOG ====="
@@ -335,6 +358,7 @@ jobs:
             fi
 
             if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+              echo
               echo "Bore encerrou."
 
               echo "===== BORE LOG ====="
@@ -344,6 +368,7 @@ jobs:
             fi
 
             sleep 10
+
           done
 
       - name: Logs
@@ -354,4 +379,5 @@ jobs:
           path: |
             ios_files/qemu.log
             ios_files/bore.log
+            qemu_path.txt
           retention-days: 7
