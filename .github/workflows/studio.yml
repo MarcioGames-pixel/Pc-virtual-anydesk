@@ -10,12 +10,10 @@ jobs:
 
     steps:
 
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Dependências
+      - name: Instalar dependências
         run: |
           sudo apt-get update
+
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             openjdk-17-jdk \
             wget \
@@ -25,18 +23,38 @@ jobs:
             x11vnc \
             fluxbox \
             qemu-kvm \
-            qemu-utils \
-            python3 \
-            git
+            libvirt-daemon-system \
+            libpulse0 \
+            libnss3 \
+            libx11-6 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxi6 \
+            libxrandr2 \
+            libxtst6 \
+            libglu1-mesa \
+            novnc \
+            websockify
+
+          java -version
 
       - name: Configurar KVM
         run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm não existe."
+            exit 1
+          fi
+
+          sudo groupadd -f kvm
+          sudo chown root:kvm /dev/kvm || true
           sudo chmod 666 /dev/kvm
+
           ls -l /dev/kvm
 
       - name: Instalar Android SDK
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
 
           mkdir -p "$HOME/android-sdk/cmdline-tools"
 
@@ -45,6 +63,8 @@ jobs:
           wget -q \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -O sdk.zip
+
+          rm -rf "$HOME/android-sdk/cmdline-tools/latest"
 
           unzip -q sdk.zip \
             -d "$HOME/android-sdk/cmdline-tools"
@@ -60,7 +80,7 @@ jobs:
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/emulator" >> "$GITHUB_PATH"
 
-      - name: Instalar Android 2.3
+      - name: Instalar ferramentas Android
         run: |
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
@@ -72,17 +92,11 @@ jobs:
             "emulator" \
             "system-images;android-10;default;x86"
 
-      - name: Criar SD Card
-        run: |
-          qemu-img create \
-            -f raw \
-            sdcard.img \
-            2G
-
-          ls -lh sdcard.img
-
       - name: Criar AVD Nexus S
         run: |
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/android-sdk"
+
           mkdir -p "$HOME/.android/avd"
 
           AVD="$HOME/.android/avd/NexusS.avd"
@@ -104,57 +118,74 @@ jobs:
           avd.ini.displayname=Nexus S
           avd.ini.encoding=UTF-8
           PlayStore.enabled=false
-
           abi.type=x86
           hw.cpu.arch=x86
           hw.cpu.ncore=1
-
           hw.ramSize=512
           hw.heapSize=48
-
           hw.keyboard=yes
           hw.mainKeys=no
           hw.dPad=no
           hw.trackBall=no
-
           hw.gps=yes
           hw.audioInput=yes
           hw.audioOutput=yes
-
           hw.lcd.width=480
           hw.lcd.height=800
           hw.lcd.density=240
-
           hw.sdCard=yes
           sdcard.size=2048M
-
           hw.sensors.orientation=yes
           hw.sensors.proximity=yes
           hw.sensors.magnetic_field=yes
           hw.sensors.accelerometer=yes
-
           disk.dataPartition.size=1024M
-
           image.sysdir.1=system-images/android-10/default/x86/
-
           runtime.network.latency=none
           runtime.network.speed=full
-
           showDeviceFrame=no
           skin.dynamic=no
-          skin.name=WVGA800
-
           tag.display=default
-
           vm.heapSize=48
           EOF
 
-      - name: Xvfb
+          cat "$AVD/config.ini"
+
+      - name: Criar SD card
+        run: |
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/android-sdk"
+          export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
+
+          emulator \
+            -avd NexusS \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -wipe-data \
+            -verbose \
+            > sdcard-init.log 2>&1 &
+
+          EMU_PID=$!
+
+          sleep 20
+
+          adb wait-for-device || true
+
+          adb shell 'ls -la /sdcard' || true
+
+          kill "$EMU_PID" 2>/dev/null || true
+          pkill -f "emulator.*NexusS" 2>/dev/null || true
+
+          sleep 3
+
+      - name: Iniciar Xvfb
         run: |
           export DISPLAY=:99
 
           Xvfb :99 \
-            -screen 0 480x800x24 \
+            -screen 0 800x800x24 \
             -ac \
             +extension RANDR \
             > xvfb.log 2>&1 &
@@ -163,7 +194,9 @@ jobs:
 
           sleep 3
 
-      - name: Fluxbox
+          kill -0 "$(cat xvfb.pid)"
+
+      - name: Iniciar Fluxbox
         run: |
           export DISPLAY=:99
 
@@ -174,7 +207,7 @@ jobs:
 
           sleep 3
 
-      - name: Iniciar Android 2.3 Nexus S
+      - name: Iniciar Android Nexus S
         run: |
           export DISPLAY=:99
 
@@ -184,6 +217,11 @@ jobs:
 
           export PATH="$JAVA_HOME/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
 
+          echo "=== KVM ==="
+          ls -l /dev/kvm
+
+          echo "=== INICIANDO ANDROID ==="
+
           emulator \
             -avd NexusS \
             -gpu swiftshader_indirect \
@@ -192,6 +230,7 @@ jobs:
             -no-boot-anim \
             -no-snapshot \
             -no-metrics \
+            -skin 480x800 \
             > emulator.log 2>&1 &
 
           echo $! > emulator.pid
@@ -199,6 +238,7 @@ jobs:
           sleep 30
 
           if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+            echo "Emulador encerrou."
             cat emulator.log
             exit 1
           fi
@@ -216,7 +256,7 @@ jobs:
 
           adb devices
 
-      - name: VNC
+      - name: Iniciar VNC
         run: |
           export DISPLAY=:99
 
@@ -227,25 +267,31 @@ jobs:
             -shared \
             -nopw \
             -xkb \
+            -noxrecord \
+            -noxfixes \
+            -noxdamage \
             > vnc.log 2>&1 &
 
           echo $! > vnc.pid
 
           sleep 5
 
-      - name: Instalar noVNC
-        run: |
-          git clone --depth 1 \
-            https://github.com/novnc/noVNC.git \
-            novnc
+          if ! kill -0 "$(cat vnc.pid)" 2>/dev/null; then
+            echo "VNC encerrou."
+            cat vnc.log
+            exit 1
+          fi
 
-          chmod +x novnc/utils/novnc_proxy
+          ss -lntp | grep 5901 || true
 
       - name: Iniciar noVNC
         run: |
-          nohup ./novnc/utils/novnc_proxy \
-            --vnc localhost:5901 \
-            --listen 6080 \
+          export DISPLAY=:99
+
+          websockify \
+            --web=/usr/share/novnc \
+            6080 \
+            localhost:5901 \
             > novnc.log 2>&1 &
 
           echo $! > novnc.pid
@@ -253,16 +299,19 @@ jobs:
           sleep 5
 
           if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+            echo "noVNC encerrou."
             cat novnc.log
             exit 1
           fi
+
+          ss -lntp | grep 6080 || true
 
       - name: Instalar Bore
         run: |
           curl -fL \
             --retry 5 \
             --retry-delay 3 \
-            https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz \
+            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz \
             -o bore.tar.gz
 
           tar -xzf bore.tar.gz
@@ -275,7 +324,7 @@ jobs:
 
       - name: Expor noVNC
         run: |
-          nohup bore local 6080 \
+          bore local 6080 \
             --to bore.pub \
             --port 6080 \
             > bore-novnc.log 2>&1 &
@@ -285,23 +334,22 @@ jobs:
           sleep 10
 
           if ! kill -0 "$(cat bore-novnc.pid)" 2>/dev/null; then
+            echo "Bore noVNC encerrou."
             cat bore-novnc.log
             exit 1
           fi
 
           echo "======================================"
-          echo "ANDROID 2.3 - NEXUS S"
+          echo "ANDROID 2.3 NEXUS S"
           echo "======================================"
-          echo
           echo "noVNC:"
           echo "http://bore.pub:6080/vnc.html"
           echo
           echo "VNC:"
           echo "bore.pub:5901"
           echo
-          echo "SD CARD:"
-          ls -lh sdcard.img
-          echo
+          echo "ADB:"
+          echo "127.0.0.1:5555"
           echo "======================================"
 
           cat bore-novnc.log
@@ -311,21 +359,25 @@ jobs:
           for i in $(seq 1 540); do
 
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+              echo "Emulador encerrou."
               cat emulator.log
               exit 1
             fi
 
             if ! kill -0 "$(cat vnc.pid)" 2>/dev/null; then
+              echo "VNC encerrou."
               cat vnc.log
               exit 1
             fi
 
             if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+              echo "noVNC encerrou."
               cat novnc.log
               exit 1
             fi
 
             if ! kill -0 "$(cat bore-novnc.pid)" 2>/dev/null; then
+              echo "Bore encerrou."
               cat bore-novnc.log
               exit 1
             fi
@@ -345,12 +397,5 @@ jobs:
             bore-novnc.log
             xvfb.log
             fluxbox.log
-          retention-days: 7
-
-      - name: SD Card
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-2.3-NexusS-sdcard
-          path: sdcard.img
+            sdcard-init.log
           retention-days: 7
