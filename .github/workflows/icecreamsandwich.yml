@@ -6,7 +6,7 @@ on:
 jobs:
   android-x86:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 360
 
     steps:
       - name: Dependencias
@@ -157,7 +157,7 @@ jobs:
           echo "bore.pub:5555"
           echo "======================================"
 
-          sleep 600
+          sleep 21550
 
       - name: Finalizar
         if: always()
