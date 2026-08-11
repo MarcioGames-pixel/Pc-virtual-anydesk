@@ -1,12 +1,16 @@
-name: Android-x86 4.3 VNC ADB
+name: Android-x86 4.3 VNC noVNC ADB
 
 on:
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   android-x86:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
 
     steps:
       - name: Dependências
@@ -16,8 +20,46 @@ jobs:
             qemu-system-x86 \
             qemu-utils \
             wget \
+            curl \
             pulseaudio \
-            pulseaudio-utils
+            pulseaudio-utils \
+            novnc \
+            websockify
+
+      - name: Recuperar QCOW2 anterior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREVIOUS_RUN=$(gh run list \
+            --workflow "${{ github.workflow }}" \
+            --status completed \
+            --limit 10 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+
+          if [ -n "$PREVIOUS_RUN" ]; then
+            mkdir -p previous
+
+            if gh run download "$PREVIOUS_RUN" \
+              --name Android-x86-4.3-QCOW2 \
+              --dir previous; then
+
+              if [ -f previous/android43-installed.qcow2 ]; then
+                mv previous/android43-installed.qcow2 android43.qcow2
+                echo "QCOW2 anterior recuperado."
+                qemu-img info android43.qcow2
+              else
+                echo "QCOW2 não encontrado. Criando novo."
+                qemu-img create -f qcow2 android43.qcow2 20G
+              fi
+            else
+              echo "Artifact anterior não encontrado. Criando novo."
+              qemu-img create -f qcow2 android43.qcow2 20G
+            fi
+          else
+            echo "Primeira execução. Criando QCOW2."
+            qemu-img create -f qcow2 android43.qcow2 20G
+          fi
 
       - name: KVM
         run: |
@@ -40,16 +82,13 @@ jobs:
           sleep 5
 
           export PULSE_SERVER=127.0.0.1
+
           pactl info
 
       - name: Android-x86 4.3
         run: |
           wget -O android-x86-4.3.iso \
             https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-x86/android-x86-4.3-20130725.iso
-
-      - name: QCOW2
-        run: |
-          qemu-img create -f qcow2 android43.qcow2 20G
 
       - name: QEMU
         run: |
@@ -79,7 +118,8 @@ jobs:
 
           echo $! > qemu.pid
 
-          sleep 10
+          sleep 15
+
           cat qemu.log
 
           kill -0 "$(cat qemu.pid)"
@@ -108,19 +148,37 @@ jobs:
             --port 5901 \
             > vnc-bore.log 2>&1 &
 
+      - name: noVNC
+        run: |
+          nohup websockify \
+            --web=/usr/share/novnc \
+            6080 \
+            127.0.0.1:5901 \
+            > novnc.log 2>&1 &
+
+          echo $! > novnc.pid
+
+          sleep 5
+
+          kill -0 "$(cat novnc.pid)"
+
+      - name: Bore noVNC 6080
+        run: |
+          nohup ./bore \
+            local 6080 \
+            --to bore.pub \
+            --port 6080 \
+            > novnc-bore.log 2>&1 &
+
           sleep 10
 
-          echo "================================"
-          echo "ADB: bore.pub:5555"
+          echo "ADB: adb connect bore.pub:5555"
           echo "VNC: bore.pub:5901"
-          echo "================================"
-
-          cat adb-bore.log
-          cat vnc-bore.log
+          echo "noVNC: http://bore.pub:6080/vnc.html"
 
       - name: Instalação manual
         run: |
-          sleep 600
+          sleep 21495
 
       - name: Finalizar
         if: always()
