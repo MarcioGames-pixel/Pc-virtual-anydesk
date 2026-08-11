@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Dependências
         run: |
           sudo apt update
@@ -31,6 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           PREVIOUS_RUN=$(gh run list \
+            --repo "${{ github.repository }}" \
             --workflow "${{ github.workflow }}" \
             --status completed \
             --limit 10 \
@@ -38,9 +42,12 @@ jobs:
             --jq '.[0].databaseId')
 
           if [ -n "$PREVIOUS_RUN" ]; then
+            echo "Execução anterior: $PREVIOUS_RUN"
+
             mkdir -p previous
 
             if gh run download "$PREVIOUS_RUN" \
+              --repo "${{ github.repository }}" \
               --name Android-x86-4.3-QCOW2 \
               --dir previous; then
 
@@ -49,15 +56,15 @@ jobs:
                 echo "QCOW2 anterior recuperado."
                 qemu-img info android43.qcow2
               else
-                echo "QCOW2 não encontrado. Criando novo."
+                echo "QCOW2 não encontrado."
                 qemu-img create -f qcow2 android43.qcow2 20G
               fi
             else
-              echo "Artifact anterior não encontrado. Criando novo."
+              echo "Artifact anterior não encontrado."
               qemu-img create -f qcow2 android43.qcow2 20G
             fi
           else
-            echo "Primeira execução. Criando QCOW2."
+            echo "Nenhuma execução anterior encontrada."
             qemu-img create -f qcow2 android43.qcow2 20G
           fi
 
