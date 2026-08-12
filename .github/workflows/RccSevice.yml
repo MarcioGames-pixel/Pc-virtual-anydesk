@@ -6,57 +6,138 @@ on:
 jobs:
   run:
     runs-on: windows-latest
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Download 0.206.zip
-        shell: cmd
+        shell: pwsh
         run: |
-          curl -L --fail -o 0.206.zip "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
+          $url = "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile "0.206.zip" `
+            -UseBasicParsing
+
+          if (!(Test-Path "0.206.zip")) {
+            throw "0.206.zip não foi baixado."
+          }
+
+          Get-Item "0.206.zip" | Select-Object Name,Length
 
       - name: Extract RccService
         shell: pwsh
         run: |
-          Expand-Archive -Path 0.206.zip -DestinationPath RccService -Force
+          if (Test-Path "RccService") {
+            Remove-Item "RccService" -Recurse -Force
+          }
 
-      - name: Check RccService
-        shell: cmd
-        run: |
-          dir RccService
-          if not exist "RccService\start.bat" exit /b 1
-          if not exist "RccService\RccService.exe" exit /b 1
+          New-Item -ItemType Directory -Path "RccService" | Out-Null
 
-      - name: Start RccService
-        shell: cmd
-        run: |
-          cd /d RccService
-          start "" /B cmd /c start.bat
+          Expand-Archive `
+            -Path "0.206.zip" `
+            -DestinationPath "RccService" `
+            -Force
 
-      - name: Wait for RccService
-        shell: cmd
-        run: |
-          timeout /t 5 /nobreak
-
-      - name: Check port 64989
-        shell: cmd
-        run: |
-          netstat -ano | findstr :64989 || echo Porta 64989 ainda nao apareceu
-
-      - name: Download Bore
+      - name: Verify files
         shell: pwsh
         run: |
-          Invoke-WebRequest `
-            "https://github.com/ekzhang/bore/releases/latest/download/bore.exe" `
-            -OutFile bore.exe
+          Write-Host "=== Conteúdo do RccService ==="
+          Get-ChildItem "RccService" -Force
 
-      - name: Start Bore
-        shell: cmd
+          if (!(Test-Path "RccService\start.bat")) {
+            throw "RccService\start.bat não encontrado."
+          }
+
+          if (!(Test-Path "RccService\RccService.exe")) {
+            throw "RccService\RccService.exe não encontrado."
+          }
+
+          Write-Host ""
+          Write-Host "=== start.bat ==="
+          Get-Content "RccService\start.bat"
+
+      - name: Start RccService
+        shell: pwsh
         run: |
-          bore.exe local 64989 --to bore.pub
+          $workingDir = Join-Path $PWD "RccService"
+
+          $process = Start-Process `
+            -FilePath "cmd.exe" `
+            -ArgumentList "/c", "start.bat" `
+            -WorkingDirectory $workingDir `
+            -PassThru
+
+          Write-Host "RccService iniciado."
+          Write-Host "PID: $($process.Id)"
+
+          $process.Id | Out-File "rcc.pid"
+
+      - name: Wait for RccService
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 10
+
+      - name: Check RccService
+        shell: pwsh
+        run: |
+          Write-Host "=== Processos ==="
+
+          Get-Process -Name "RccService" -ErrorAction SilentlyContinue |
+            Select-Object Id,ProcessName,CPU,WorkingSet
+
+          Write-Host ""
+          Write-Host "=== Portas TCP ==="
+
+          Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Sort-Object LocalPort |
+            Select-Object LocalAddress,LocalPort,OwningProcess
+
+      - name: Check port 64989
+        shell: pwsh
+        run: |
+          $connection = Get-NetTCPConnection `
+            -LocalPort 64989 `
+            -State Listen `
+            -ErrorAction SilentlyContinue
+
+          if ($connection) {
+            Write-Host "Porta 64989 está aberta."
+            $connection | Format-Table
+          }
+          else {
+            Write-Host "Porta 64989 não está aberta."
+            Write-Host "O RccService pode estar usando outra porta."
+          }
+
+      - name: Show RccService log
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "RccService\rcc.log") {
+            Write-Host "=== rcc.log ==="
+            Get-Content "RccService\rcc.log" -Tail 200
+          }
+          else {
+            Write-Host "rcc.log ainda não existe."
+          }
 
       - name: Keep alive
-        shell: cmd
+        shell: pwsh
         run: |
-          timeout /t 21600 /nobreak
+          while ($true) {
+            $process = Get-Process -Name "RccService" -ErrorAction SilentlyContinue
+
+            if ($process) {
+              Write-Host "RccService está rodando."
+            }
+            else {
+              Write-Host "RccService não está rodando."
+              break
+            }
+
+            Start-Sleep -Seconds 30
+          }
