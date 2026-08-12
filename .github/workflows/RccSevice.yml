@@ -16,27 +16,45 @@ jobs:
         run: |
           curl -L --fail -o 0.206.zip "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
 
-      - name: Extract
+      - name: Extract RccService
         shell: pwsh
         run: |
           Expand-Archive -Path 0.206.zip -DestinationPath RccService -Force
 
-      - name: Check files
+      - name: Check RccService
         shell: cmd
         run: |
           dir RccService
-          if exist "RccService\start.bat" (
-            echo start.bat encontrado
-          ) else (
-            echo ERRO: start.bat nao encontrado
-            exit /b 1
-          )
+          if not exist "RccService\start.bat" exit /b 1
+          if not exist "RccService\RccService.exe" exit /b 1
 
       - name: Start RccService
         shell: cmd
         run: |
           cd /d RccService
-          call start.bat
+          start "" /B cmd /c start.bat
+
+      - name: Wait for RccService
+        shell: cmd
+        run: |
+          timeout /t 5 /nobreak
+
+      - name: Check port 64989
+        shell: cmd
+        run: |
+          netstat -ano | findstr :64989 || echo Porta 64989 ainda nao apareceu
+
+      - name: Download Bore
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            "https://github.com/ekzhang/bore/releases/latest/download/bore.exe" `
+            -OutFile bore.exe
+
+      - name: Start Bore
+        shell: cmd
+        run: |
+          bore.exe local 64989 --to bore.pub
 
       - name: Keep alive
         shell: cmd
