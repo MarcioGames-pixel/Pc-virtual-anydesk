@@ -1,61 +1,104 @@
-name: Teste de Acesso Remoto AnyDesk - 6 Horas
+name: Windows XP Gamer KVM
 
 on:
   workflow_dispatch:
 
 jobs:
-  conectar-anydesk:
-    runs-on: windows-latest # Garante o uso do ambiente Windows oficial
-    timeout-minutes: 360
+  vm:
+    runs-on: ubuntu-latest
 
-    steps:  
-      - name: Baixar o instalador oficial do AnyDesk  
-        shell: powershell  
-        run: |  
-          Write-Host "Baixando o AnyDesk..."  
-          Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile "AnyDesk.exe"  
+    steps:
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-kvm \
+            qemu-system-x86 \
+            qemu-utils \
+            novnc \
+            websockify \
+            wget \
+            python3
 
-      - name: Instalar o AnyDesk em modo silencioso  
-        shell: powershell  
-        run: |  
-          Write-Host "Instalando o aplicativo no sistema..."  
-          # Corrigido o caminho para evitar falhas de variáveis de ambiente
-          Start-Process -FilePath ".\AnyDesk.exe" -ArgumentList "--install", "C:\Program Files (x86)\AnyDesk", "--silent" -Wait  
+      - name: Check KVM
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "KVM não está disponível neste runner."
+            exit 1
+          fi
 
-      - name: Configurar senha de acesso  
-        shell: powershell  
-        run: |  
-          Write-Host "Definindo a senha de acesso não supervisionado..."  
-          # Sintaxe corrigida do PowerShell para injetar a senha via CLI do Windows
-          cmd.exe /c 'echo HelloWorld | "C:\Program Files (x86)\AnyDesk\AnyDesk.exe" --set-password'
+          ls -l /dev/kvm
 
-      - name: Obter ID e manter ativo por 6 horas  
-        shell: powershell  
-        run: |  
-          Write-Host "Aguardando inicialização do serviço..."  
-          Start-Sleep -Seconds 15  
-            
-          # Executa o executável diretamente informando o caminho exato
-          $anydeskId = (& "C:\Program Files (x86)\AnyDesk\AnyDesk.exe" --get-id).Trim()
-            
-          Write-Host "=========================================="  
-          Write-Host "👉 SEU ID PARA CONEXÃO É: $anydeskId"  
-          Write-Host "👉 SUA SENHA DEFINIDA É: HelloWorld"  
-          Write-Host "=========================================="  
-            
-          Write-Host "Iniciando loop para manter o runner vivo..."  
-            
-          $wsh = New-Object -ComObject WScript.Shell  
-          $minutosTotais = 350 
-            
-          for ($i = 1; $i -le $minutosTotais; $i++) {  
-              Start-Sleep -Seconds 60  
-              
-              # Envia F15 para evitar timeout por falta de uso do teclado virtual
-              $wsh.SendKeys("{F15}")  
-                
-              if ($i % 10 -eq 0) {  
-                  Write-Host "Dispositivo online. Tempo decorrido: $i minutos."  
-              }  
-          }
-          
+      - name: Download Windows XP ISO
+        run: |
+          wget -O windows-xp.iso \
+            "https://archive.org/download/WinXPProSP3x86/en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso"
+
+      - name: Create QCOW2
+        run: |
+          qemu-img create \
+            -f qcow2 \
+            xp-gamer.qcow2 \
+            64G
+
+      - name: Create shared folder
+        run: |
+          mkdir -p Shared
+
+      - name: Start QEMU
+        run: |
+          nohup qemu-system-i386 \
+            -enable-kvm \
+            -machine pc,accel=kvm \
+            -cpu host \
+            -smp 4,sockets=1,cores=4,threads=1 \
+            -m 4096 \
+            -drive file=xp-gamer.qcow2,format=qcow2,if=ide,cache=writeback \
+            -cdrom windows-xp.iso \
+            -boot order=d \
+            -vga std \
+            -device AC97 \
+            -device e1000,netdev=net0 \
+            -netdev user,id=net0 \
+            -drive file=fat:rw:./Shared,format=raw,media=disk \
+            -usb \
+            -device usb-tablet \
+            -rtc base=localtime \
+            -overcommit mem-lock=off \
+            -vnc 127.0.0.1:0 \
+            -monitor none \
+            > qemu.log 2>&1 &
+
+          echo $! > qemu.pid
+
+      - name: Start noVNC
+        run: |
+          nohup websockify \
+            --web=/usr/share/novnc \
+            127.0.0.1:6080 \
+            127.0.0.1:5900 \
+            > novnc.log 2>&1 &
+
+          echo $! > novnc.pid
+
+      - name: Check services
+        run: |
+          sleep 5
+
+          echo "=== QEMU ==="
+          cat qemu.log || true
+
+          echo "=== noVNC ==="
+          cat novnc.log || true
+
+          echo "=== Ports ==="
+          ss -lntp | grep -E ':5900|:6080' || true
+
+      - name: Keep VM running
+        run: |
+          while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
+            sleep 30
+          done
+
+          echo "QEMU terminou."
+          cat qemu.log
