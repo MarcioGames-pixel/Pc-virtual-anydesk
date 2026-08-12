@@ -24,30 +24,19 @@ jobs:
       - name: Check files
         shell: cmd
         run: |
-          dir
           dir RccService
-          if exist start.bat (
-            echo start.bat encontrado na raiz
+          if exist "RccService\start.bat" (
+            echo start.bat encontrado
           ) else (
-            echo ERRO: start.bat nao encontrado na raiz
+            echo ERRO: start.bat nao encontrado
             exit /b 1
           )
 
       - name: Start RccService
         shell: cmd
         run: |
-          start "" /B start.bat
-
-      - name: Install Bore
-        shell: pwsh
-        run: |
-          $url = "https://github.com/ekzhang/bore/releases/latest/download/bore.exe"
-          Invoke-WebRequest $url -OutFile bore.exe
-
-      - name: Start Bore
-        shell: cmd
-        run: |
-          bore.exe local 64989 --to bore.pub
+          cd /d RccService
+          call start.bat
 
       - name: Keep alive
         shell: cmd
