@@ -153,7 +153,7 @@ jobs:
 
           echo $! > qemu.pid
 
-          sleep 10
+          sleep 2
 
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
             cat qemu.log
@@ -173,7 +173,7 @@ jobs:
 
           echo $! > novnc.pid
 
-          sleep 5
+          sleep 2
 
           if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
             cat novnc.log
@@ -190,7 +190,7 @@ jobs:
 
           echo $! > bore-vnc.pid
 
-          sleep 5
+          sleep 2
 
           cat bore-vnc.log
 
@@ -204,7 +204,7 @@ jobs:
 
           echo $! > bore-novnc.pid
 
-          sleep 10
+          sleep 2
 
           cat bore-novnc.log
 
