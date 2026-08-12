@@ -9,58 +9,46 @@ jobs:
     timeout-minutes: 360
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Download 0.206.zip
+        shell: cmd
+        run: |
+          curl.exe -L --fail ^
+            -H "ngrok-skip-browser-warning: true" ^
+            -H "User-Agent: Mozilla/5.0" ^
+            -o 0.206.zip ^
+            "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
+
+          echo.
+          echo === Arquivo baixado ===
+          dir 0.206.zip
+
+      - name: Verify ZIP
         shell: pwsh
         run: |
-          $url = "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
-
-          Write-Host "Baixando:"
-          Write-Host $url
-
-          try {
-            Invoke-WebRequest `
-              -Uri $url `
-              -OutFile "0.206.zip" `
-              -MaximumRedirection 10 `
-              -UseBasicParsing `
-              -ErrorAction Stop
-          }
-          catch {
-            Write-Host "ERRO no download:"
-            Write-Host $_
-            exit 1
-          }
-
           $file = Get-Item "0.206.zip"
 
-          Write-Host ""
-          Write-Host "Arquivo recebido:"
-          Write-Host "Nome: $($file.Name)"
           Write-Host "Tamanho: $($file.Length) bytes"
-
-          Write-Host ""
-          Write-Host "Primeiros bytes:"
-
-          Format-Hex -Path "0.206.zip" -Count 64
 
           if ($file.Length -lt 1000000) {
             Write-Host ""
-            Write-Host "ERRO: o arquivo recebido é muito pequeno para ser o 0.206.zip."
-            exit 1
+            Write-Host "Resposta recebida:"
+            Get-Content "0.206.zip" -Raw
+            throw "O download não parece ser o 0.206.zip."
           }
 
-          $header = [System.IO.File]::ReadAllBytes("0.206.zip")[0..3]
+          $bytes = [System.IO.File]::ReadAllBytes("0.206.zip")
 
-          if ($header[0] -ne 0x50 -or
-              $header[1] -ne 0x4B -or
-              $header[2] -ne 0x03 -or
-              $header[3] -ne 0x04) {
-
-            Write-Host "ERRO: o arquivo não possui assinatura ZIP válida."
-            exit 1
+          if (
+            $bytes[0] -ne 0x50 -or
+            $bytes[1] -ne 0x4B -or
+            $bytes[2] -ne 0x03 -or
+            $bytes[3] -ne 0x04
+          ) {
+            throw "O arquivo baixado não possui assinatura ZIP válida."
           }
 
           Write-Host "ZIP válido."
@@ -68,16 +56,22 @@ jobs:
       - name: Extract RccService
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path "RccService" -Force | Out-Null
+          if (Test-Path "RccService") {
+            Remove-Item "RccService" -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path "RccService" | Out-Null
 
           Expand-Archive `
             -Path "0.206.zip" `
             -DestinationPath "RccService" `
             -Force
 
-      - name: Verify RccService
+      - name: Check RccService files
         shell: pwsh
         run: |
+          Write-Host "=== Conteúdo extraído ==="
+
           Get-ChildItem "RccService" -Force
 
           if (!(Test-Path "RccService\start.bat")) {
@@ -88,46 +82,93 @@ jobs:
             throw "RccService\RccService.exe não encontrado."
           }
 
-      - name: Show start.bat
-        shell: cmd
-        run: |
-          type RccService\start.bat
+          Write-Host ""
+          Write-Host "=== start.bat ==="
+
+          Get-Content "RccService\start.bat"
 
       - name: Start RccService
         shell: pwsh
         run: |
-          Start-Process `
+          $workingDir = Join-Path $PWD "RccService"
+
+          Write-Host "Diretório:"
+          Write-Host $workingDir
+
+          $process = Start-Process `
             -FilePath "cmd.exe" `
             -ArgumentList "/c", "start.bat" `
-            -WorkingDirectory "$PWD\RccService"
+            -WorkingDirectory $workingDir `
+            -PassThru
+
+          Write-Host "Processo iniciado."
+          Write-Host "PID: $($process.Id)"
 
           Start-Sleep -Seconds 10
 
-      - name: Check RccService
+      - name: Check RccService process
         shell: pwsh
         run: |
-          Get-Process RccService -ErrorAction SilentlyContinue
+          Write-Host "=== Processos RccService ==="
 
-          Write-Host ""
-          Write-Host "=== Portas ==="
-
-          Get-NetTCPConnection `
-            -State Listen `
+          Get-Process -Name "RccService" `
             -ErrorAction SilentlyContinue |
-            Sort-Object LocalPort |
-            Format-Table LocalAddress,LocalPort,OwningProcess
+            Select-Object Id,ProcessName,CPU,WorkingSet
 
-      - name: Show rcc.log
+      - name: Check port 64989
+        shell: pwsh
+        run: |
+          Write-Host "=== Porta 64989 ==="
+
+          $connection = Get-NetTCPConnection `
+            -LocalPort 64989 `
+            -State Listen `
+            -ErrorAction SilentlyContinue
+
+          if ($connection) {
+            Write-Host "Porta 64989 está aberta."
+            $connection | Format-Table
+          }
+          else {
+            Write-Host "Porta 64989 não está aberta."
+            Write-Host ""
+            Write-Host "=== Portas abertas ==="
+
+            Get-NetTCPConnection `
+              -State Listen `
+              -ErrorAction SilentlyContinue |
+              Sort-Object LocalPort |
+              Format-Table LocalAddress,LocalPort,OwningProcess
+          }
+
+      - name: Show RccService log
         if: always()
         shell: pwsh
         run: |
           if (Test-Path "RccService\rcc.log") {
+            Write-Host "=== rcc.log ==="
             Get-Content "RccService\rcc.log" -Tail 200
           }
+          else {
+            Write-Host "rcc.log não encontrado."
+          }
 
-      - name: Keep alive
+      - name: Keep RccService running
         shell: pwsh
         run: |
-          while (Get-Process RccService -ErrorAction SilentlyContinue) {
+          while ($true) {
+
+            $process = Get-Process `
+              -Name "RccService" `
+              -ErrorAction SilentlyContinue
+
+            if ($process) {
+              Write-Host "$(Get-Date) - RccService está rodando."
+            }
+            else {
+              Write-Host "$(Get-Date) - RccService encerrou."
+              break
+            }
+
             Start-Sleep -Seconds 30
           }
