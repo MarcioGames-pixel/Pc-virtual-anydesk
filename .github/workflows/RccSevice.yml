@@ -1,0 +1,55 @@
+name: RccService
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download 0.206.zip
+        shell: cmd
+        run: |
+          curl -L --fail -o 0.206.zip "https://somnolently-cryptogrammatic-shandi.ngrok-free.dev/0.206.zip"
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          Expand-Archive -Path 0.206.zip -DestinationPath RccService -Force
+
+      - name: Check files
+        shell: cmd
+        run: |
+          dir
+          dir RccService
+          if exist start.bat (
+            echo start.bat encontrado na raiz
+          ) else (
+            echo ERRO: start.bat nao encontrado na raiz
+            exit /b 1
+          )
+
+      - name: Start RccService
+        shell: cmd
+        run: |
+          start "" /B start.bat
+
+      - name: Install Bore
+        shell: pwsh
+        run: |
+          $url = "https://github.com/ekzhang/bore/releases/latest/download/bore.exe"
+          Invoke-WebRequest $url -OutFile bore.exe
+
+      - name: Start Bore
+        shell: cmd
+        run: |
+          bore.exe local 64989 --to bore.pub
+
+      - name: Keep alive
+        shell: cmd
+        run: |
+          timeout /t 21600 /nobreak
