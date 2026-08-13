@@ -115,22 +115,34 @@ jobs:
             -ErrorAction SilentlyContinue |
             Select-Object Id,ProcessName,CPU,WorkingSet
 
-      - name: Check port 64989
+      - name: Wait for port 64989
         shell: pwsh
         run: |
-          Write-Host "=== Porta 64989 ==="
+          Write-Host "=== Aguardando porta 64989 ==="
 
-          $connection = Get-NetTCPConnection `
-            -LocalPort 64989 `
-            -State Listen `
-            -ErrorAction SilentlyContinue
+          $listening = $false
 
-          if ($connection) {
-            Write-Host "Porta 64989 está aberta."
-            $connection | Format-Table
+          for ($i = 1; $i -le 30; $i++) {
+
+            $connection = Get-NetTCPConnection `
+              -LocalPort 64989 `
+              -State Listen `
+              -ErrorAction SilentlyContinue
+
+            if ($connection) {
+              Write-Host "Porta 64989 está aberta."
+              $connection | Format-Table
+              $listening = $true
+              break
+            }
+
+            Write-Host "Aguardando... tentativa $i/30"
+            Start-Sleep -Seconds 2
           }
-          else {
-            Write-Host "Porta 64989 não está aberta."
+
+          if (!$listening) {
+            Write-Host "Porta 64989 não abriu."
+
             Write-Host ""
             Write-Host "=== Portas abertas ==="
 
@@ -139,7 +151,120 @@ jobs:
               -ErrorAction SilentlyContinue |
               Sort-Object LocalPort |
               Format-Table LocalAddress,LocalPort,OwningProcess
+
+            throw "RccService não abriu a porta 64989."
           }
+
+      - name: Start Bore
+        shell: pwsh
+        run: |
+          Write-Host "=== Baixando Bore ==="
+
+          $url = "https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.2-x86_64-pc-windows-msvc.zip"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile "bore.zip"
+
+          Write-Host "=== Extraindo Bore ==="
+
+          if (Test-Path "bore") {
+            Remove-Item "bore" -Recurse -Force
+          }
+
+          Expand-Archive `
+            -Path "bore.zip" `
+            -DestinationPath "bore" `
+            -Force
+
+          $bore = Get-ChildItem "bore" `
+            -Filter "bore.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (!$bore) {
+            throw "bore.exe não encontrado."
+          }
+
+          Write-Host "Bore:"
+          Write-Host $bore.FullName
+
+          Write-Host ""
+          Write-Host "=== Iniciando Bore ==="
+          Write-Host "Destino: bore.pub"
+          Write-Host "Porta local: 64989"
+          Write-Host "Porta pública solicitada: 64989"
+
+          Start-Process `
+            -FilePath $bore.FullName `
+            -ArgumentList "local", "64989", "--to", "bore.pub", "--port", "64989" `
+            -RedirectStandardOutput "$PWD\bore.log" `
+            -RedirectStandardError "$PWD\bore-error.log" `
+            -WindowStyle Hidden
+
+          Start-Sleep -Seconds 8
+
+          Write-Host ""
+          Write-Host "=== Bore STDOUT ==="
+
+          if (Test-Path "bore.log") {
+            Get-Content "bore.log"
+          }
+
+          Write-Host ""
+          Write-Host "=== Bore STDERR ==="
+
+          if (Test-Path "bore-error.log") {
+            Get-Content "bore-error.log"
+          }
+
+      - name: Check Bore
+        shell: pwsh
+        run: |
+          Write-Host "=== Processo Bore ==="
+
+          $bore = Get-Process `
+            -Name "bore" `
+            -ErrorAction SilentlyContinue
+
+          if ($bore) {
+            $bore |
+              Select-Object Id,ProcessName,CPU,WorkingSet |
+              Format-Table
+
+            Write-Host "Bore está rodando."
+          }
+          else {
+            Write-Host "Bore não está rodando."
+
+            if (Test-Path "bore-error.log") {
+              Write-Host ""
+              Write-Host "=== Erro do Bore ==="
+              Get-Content "bore-error.log"
+            }
+
+            throw "Bore encerrou."
+          }
+
+      - name: Show connection information
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "          RCCSERVICE ONLINE"
+          Write-Host "=========================================="
+          Write-Host ""
+          Write-Host "Local: 127.0.0.1:64989"
+          Write-Host "Bore:  bore.pub:64989"
+          Write-Host ""
+          Write-Host "=== Bore log ==="
+
+          if (Test-Path "bore.log") {
+            Get-Content "bore.log"
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
 
       - name: Show RccService log
         if: always()
@@ -153,20 +278,38 @@ jobs:
             Write-Host "rcc.log não encontrado."
           }
 
-      - name: Keep RccService running
+      - name: Keep RccService and Bore running
         shell: pwsh
         run: |
           while ($true) {
 
-            $process = Get-Process `
+            $rcc = Get-Process `
               -Name "RccService" `
               -ErrorAction SilentlyContinue
 
-            if ($process) {
+            $bore = Get-Process `
+              -Name "bore" `
+              -ErrorAction SilentlyContinue
+
+            if ($rcc) {
               Write-Host "$(Get-Date) - RccService está rodando."
             }
             else {
               Write-Host "$(Get-Date) - RccService encerrou."
+              break
+            }
+
+            if ($bore) {
+              Write-Host "$(Get-Date) - Bore está rodando."
+            }
+            else {
+              Write-Host "$(Get-Date) - Bore encerrou."
+
+              if (Test-Path "bore-error.log") {
+                Write-Host "=== Bore error ==="
+                Get-Content "bore-error.log" -Tail 100
+              }
+
               break
             }
 
