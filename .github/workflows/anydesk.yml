@@ -6,6 +6,7 @@ on:
 jobs:
   vm:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: Install packages
@@ -81,24 +82,56 @@ jobs:
 
           echo $! > novnc.pid
 
+      - name: Start Bore
+        run: |
+          wget -O bore \
+            https://github.com/ekzhang/bore/releases/latest/download/bore-linux-x86_64
+
+          chmod +x bore
+
+          nohup ./bore local 6080 \
+            --to bore.pub \
+            --port 6080 \
+            > bore.log 2>&1 &
+
+          echo $! > bore.pid
+
       - name: Check services
         run: |
           sleep 5
 
-          echo "=== QEMU ==="
+          echo "================ QEMU ================"
           cat qemu.log || true
 
-          echo "=== noVNC ==="
+          echo "================ noVNC ================"
           cat novnc.log || true
 
-          echo "=== Ports ==="
+          echo "================ Bore ================"
+          cat bore.log || true
+
+          echo "================ Ports ================"
           ss -lntp | grep -E ':5900|:6080' || true
 
-      - name: Keep VM running
+      - name: Keep VM running for 6 hours
         run: |
-          while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
-            sleep 30
-          done
+          echo "VM disponível por até 6 horas."
 
-          echo "QEMU terminou."
-          cat qemu.log
+          timeout 6h bash -c '
+            while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
+              sleep 20145
+            done
+          ' || true
+
+          echo "Tempo máximo atingido ou QEMU terminou."
+
+      - name: Show logs
+        if: always()
+        run: |
+          echo "================ QEMU LOG ================"
+          cat qemu.log || true
+
+          echo "================ noVNC LOG ================"
+          cat novnc.log || true
+
+          echo "================ Bore LOG ================"
+          cat bore.log || true
