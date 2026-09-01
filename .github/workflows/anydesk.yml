@@ -118,11 +118,7 @@ jobs:
           echo "VM disponível por até 6 horas."
 
           timeout 6h bash -c '
-            while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
-              sleep 20145
-            done
-          ' || true
-
+          sleep 21600
           echo "Tempo máximo atingido ou QEMU terminou."
 
       - name: Show logs
