@@ -16,10 +16,9 @@ jobs:
             qemu-kvm \
             qemu-system-x86 \
             qemu-utils \
-            novnc \
-            websockify \
             wget \
-            python3
+            python3 \
+            git
 
       - name: Check KVM
         run: |
@@ -29,6 +28,12 @@ jobs:
           fi
 
           ls -l /dev/kvm
+
+      - name: Download noVNC
+        run: |
+          git clone --depth 1 \
+            https://github.com/novnc/noVNC.git \
+            novnc
 
       - name: Download Windows XP ISO
         run: |
@@ -72,46 +77,70 @@ jobs:
 
           echo $! > qemu.pid
 
+          sleep 15
+
+          echo "================ QEMU ================"
+          cat qemu.log || true
+
+          kill -0 "$(cat qemu.pid)"
+
+      - name: Bore
+        run: |
+          wget -q -O bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz \
+            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+
+          tar -xzf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+
+          chmod +x bore
+
+          ./bore --version
+
       - name: Start noVNC
         run: |
-          nohup websockify \
-            --web=/usr/share/novnc \
-            127.0.0.1:6080 \
-            127.0.0.1:5900 \
+          nohup ./novnc/utils/novnc_proxy \
+            --vnc 127.0.0.1:5900 \
+            --listen 6080 \
             > novnc.log 2>&1 &
 
           echo $! > novnc.pid
 
-      - name: Start Bore
+          sleep 5
+
+          echo "================ noVNC ================"
+          cat novnc.log || true
+
+          kill -0 "$(cat novnc.pid)"
+
+      - name: Bore noVNC 6080
         run: |
-          wget -O bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz \
-            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-
-          tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-          chmod +x bore
-
-          nohup ./bore local 6080 \
+          nohup ./bore \
+            local 6080 \
             --to bore.pub \
             --port 6080 \
             > bore.log 2>&1 &
 
           echo $! > bore.pid
 
-      - name: Check services
-        run: |
-          sleep 5
-
-          echo "================ QEMU ================"
-          cat qemu.log || true
-
-          echo "================ noVNC ================"
-          cat novnc.log || true
+          sleep 10
 
           echo "================ Bore ================"
           cat bore.log || true
 
+          echo "======================================="
+          echo "Windows XP"
+          echo "noVNC:"
+          echo "http://bore.pub:6080/vnc.html"
+          echo "======================================="
+
+      - name: Check services
+        run: |
           echo "================ Ports ================"
+
           ss -lntp | grep -E ':5900|:6080' || true
+
+          echo "================ Processes ================"
+
+          ps aux | grep -E 'qemu|novnc|websockify|bore' | grep -v grep || true
 
       - name: Keep VM running for 6 hours
         run: |
@@ -130,3 +159,29 @@ jobs:
 
           echo "================ Bore LOG ================"
           cat bore.log || true
+
+      - name: Finalizar
+        if: always()
+        run: |
+          killall qemu-system-i386 || true
+          killall bore || true
+          killall websockify || true
+
+      - name: Compactar QCOW2
+        if: always()
+        run: |
+          if [ -f xp-gamer.qcow2 ]; then
+            qemu-img convert \
+              -O qcow2 \
+              -c \
+              xp-gamer.qcow2 \
+              xp-installed.qcow2
+          fi
+
+      - name: Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-XP-QCOW2
+          path: xp-installed.qcow2
+          retention-days: 7
