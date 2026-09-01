@@ -3,6 +3,10 @@ name: Windows XP Gamer KVM
 on:
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   vm:
     runs-on: ubuntu-latest
@@ -27,6 +31,11 @@ jobs:
             exit 1
           fi
 
+          ls -l /dev/kvm
+
+      - name: KVM permissions
+        run: |
+          sudo chmod 666 /dev/kvm
           ls -l /dev/kvm
 
       - name: Download noVNC
@@ -82,7 +91,10 @@ jobs:
           echo "================ QEMU ================"
           cat qemu.log || true
 
-          kill -0 "$(cat qemu.pid)"
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "QEMU não está rodando."
+            exit 1
+          fi
 
       - name: Bore
         run: |
@@ -109,7 +121,10 @@ jobs:
           echo "================ noVNC ================"
           cat novnc.log || true
 
-          kill -0 "$(cat novnc.pid)"
+          if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+            echo "noVNC não iniciou."
+            exit 1
+          fi
 
       - name: Bore noVNC 6080
         run: |
@@ -128,17 +143,16 @@ jobs:
 
           echo "======================================="
           echo "Windows XP"
-          echo "noVNC:"
-          echo "http://bore.pub:6080/vnc.html"
+          echo "noVNC: http://bore.pub:6080/vnc.html"
           echo "======================================="
 
       - name: Check services
         run: |
-          echo "================ Ports ================"
+          echo "================ PORTS ================"
 
           ss -lntp | grep -E ':5900|:6080' || true
 
-          echo "================ Processes ================"
+          echo "================ PROCESSES ================"
 
           ps aux | grep -E 'qemu|novnc|websockify|bore' | grep -v grep || true
 
