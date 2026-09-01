@@ -85,8 +85,9 @@ jobs:
       - name: Start Bore
         run: |
           wget -O bore \
-            https://github.com/ekzhang/bore/releases/latest/download/bore-linux-x86_64
+            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
 
+          tar -xf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
           chmod +x bore
 
           nohup ./bore local 6080 \
