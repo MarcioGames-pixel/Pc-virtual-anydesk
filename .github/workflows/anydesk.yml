@@ -116,8 +116,6 @@ jobs:
       - name: Keep VM running for 6 hours
         run: |
           echo "VM disponível por até 6 horas."
-
-          timeout 6h bash -c '
           sleep 21600
           echo "Tempo máximo atingido ou QEMU terminou."
 
