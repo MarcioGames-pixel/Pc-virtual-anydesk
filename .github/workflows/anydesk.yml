@@ -22,7 +22,8 @@ jobs:
             qemu-utils \
             wget \
             python3 \
-            git
+            git \
+            curl
 
       - name: Check KVM
         run: |
@@ -62,6 +63,13 @@ jobs:
 
       - name: Start QEMU
         run: |
+          VNC_PASSWORD='XPgamer1'
+
+          if [ ${#VNC_PASSWORD} -gt 8 ]; then
+            echo "ERRO: senha VNC deve ter no máximo 8 caracteres."
+            exit 1
+          fi
+
           nohup qemu-system-i386 \
             -enable-kvm \
             -machine pc,accel=kvm \
@@ -80,8 +88,8 @@ jobs:
             -device usb-tablet \
             -rtc base=localtime \
             -overcommit mem-lock=off \
-            -vnc 127.0.0.1:0 \
-            -monitor none \
+            -vnc 127.0.0.1:0,password=on \
+            -monitor unix:/tmp/qemu-monitor.sock,server=on,wait=off \
             > qemu.log 2>&1 &
 
           echo $! > qemu.pid
@@ -96,12 +104,43 @@ jobs:
             exit 1
           fi
 
-      - name: Bore
+      - name: Set VNC password
         run: |
-          wget -q -O bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz \
+          python3 - <<'PY'
+          import socket
+
+          password = "XPgamer1"
+
+          sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          sock.connect("/tmp/qemu-monitor.sock")
+
+          sock.sendall(
+              ("set_password vnc " + password + "\n").encode()
+          )
+
+          response = sock.recv(4096).decode(errors="replace")
+          print(response)
+
+          sock.close()
+          PY
+
+      - name: Verify VNC
+        run: |
+          echo "================ VNC ================"
+
+          if ss -lnt | grep -q ':5900'; then
+            echo "VNC está escutando na porta 5900."
+          else
+            echo "ERRO: VNC não está escutando."
+            exit 1
+          fi
+
+      - name: Download Bore
+        run: |
+          wget -q -O bore.tar.gz \
             https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
 
-          tar -xzf bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf bore.tar.gz
 
           chmod +x bore
 
@@ -111,7 +150,7 @@ jobs:
         run: |
           nohup ./novnc/utils/novnc_proxy \
             --vnc 127.0.0.1:5900 \
-            --listen 6080 \
+            --listen 0.0.0.0:6080 \
             > novnc.log 2>&1 &
 
           echo $! > novnc.pid
@@ -126,12 +165,19 @@ jobs:
             exit 1
           fi
 
-      - name: Bore noVNC 6080
+      - name: Test noVNC
+        run: |
+          echo "================ HTTP noVNC ================"
+
+          curl -I \
+            http://127.0.0.1:6080/vnc.html \
+            || true
+
+      - name: Start Bore
         run: |
           nohup ./bore \
             local 6080 \
             --to bore.pub \
-            --port 6080 \
             > bore.log 2>&1 &
 
           echo $! > bore.pid
@@ -143,7 +189,7 @@ jobs:
 
           echo "======================================="
           echo "Windows XP"
-          echo "noVNC: http://bore.pub:6080/vnc.html"
+          echo "Senha VNC: XPgamer1"
           echo "======================================="
 
       - name: Check services
@@ -154,13 +200,18 @@ jobs:
 
           echo "================ PROCESSES ================"
 
-          ps aux | grep -E 'qemu|novnc|websockify|bore' | grep -v grep || true
+          ps aux | grep -E 'qemu|novnc|websockify|bore' \
+            | grep -v grep || true
 
-      - name: Keep VM running for 6 hours
+      - name: Keep VM running
         run: |
-          echo "VM disponível por até 6 horas."
-          sleep 21600
-          echo "Tempo máximo atingido ou QEMU terminou."
+          echo "VM disponível."
+
+          while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
+            sleep 30
+          done
+
+          echo "QEMU terminou."
 
       - name: Show logs
         if: always()
