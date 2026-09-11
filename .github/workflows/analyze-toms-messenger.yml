@@ -22,8 +22,7 @@ jobs:
             unzip \
             p7zip-full \
             file \
-            binutils \
-            strings
+            binutils
 
       - name: Download Tom's Messenger 1.1 IPA
         run: |
