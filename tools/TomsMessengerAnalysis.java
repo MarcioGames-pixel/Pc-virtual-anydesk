@@ -1,19 +1,27 @@
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Locale;
 
 import ghidra.app.script.GhidraScript;
-import ghidra.program.model.listing.*;
-import ghidra.program.model.symbol.*;
-import ghidra.program.model.address.*;
-import ghidra.program.model.mem.*;
+import ghidra.program.model.listing.Data;
+import ghidra.program.model.listing.DataIterator;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.listing.Listing;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolIterator;
+import ghidra.program.model.symbol.SymbolTable;
 
 public class TomsMessengerAnalysis extends GhidraScript {
 
-    private PrintWriter report;
+    private PrintWriter symbolsReport;
     private PrintWriter stringsReport;
     private PrintWriter functionsReport;
+    private PrintWriter referencesReport;
 
-    private final String[] TERMS = {
+    private static final String[] TERMS = {
         "addon",
         "add-on",
         "add_on",
@@ -46,63 +54,89 @@ public class TomsMessengerAnalysis extends GhidraScript {
     @Override
     public void run() throws Exception {
 
-        File programFile =
-            new File(currentProgram.getExecutablePath());
-
-        File outputDir =
+        File reportDirectory =
             new File(System.getProperty("user.dir"), "reports");
 
-        if (!outputDir.exists()) {
-            outputDir.mkdirs();
+        if (!reportDirectory.exists()) {
+            reportDirectory.mkdirs();
         }
 
-        report = new PrintWriter(
-            new File(outputDir, "ghidra-interesting-symbols.txt")
-        );
+        symbolsReport =
+            new PrintWriter(
+                new File(
+                    reportDirectory,
+                    "ghidra-interesting-symbols.txt"
+                )
+            );
 
-        stringsReport = new PrintWriter(
-            new File(outputDir, "ghidra-interesting-strings.txt")
-        );
+        stringsReport =
+            new PrintWriter(
+                new File(
+                    reportDirectory,
+                    "ghidra-interesting-strings.txt"
+                )
+            );
 
-        functionsReport = new PrintWriter(
-            new File(outputDir, "ghidra-interesting-functions.txt")
-        );
+        functionsReport =
+            new PrintWriter(
+                new File(
+                    reportDirectory,
+                    "ghidra-interesting-functions.txt"
+                )
+            );
 
-        println("==============================================");
-        println("Tom's Messenger 1.1 Ghidra Analysis");
-        println("==============================================");
-        println("Program: " + currentProgram.getName());
-        println("Executable: " + programFile);
+        referencesReport =
+            new PrintWriter(
+                new File(
+                    reportDirectory,
+                    "ghidra-string-references.txt"
+                )
+            );
+
+        println("====================================");
+        println("Tom's Messenger 1.1");
+        println("Ghidra analysis");
+        println("====================================");
         println();
 
-        report.println("Tom's Messenger 1.1");
-        report.println("Program: " + currentProgram.getName());
-        report.println();
+        println("Program: " + currentProgram.getName());
+        println(
+            "Executable path: "
+            + currentProgram.getExecutablePath()
+        );
 
-        analyzeMemoryBlocks();
-        analyzeDefinedStrings();
+        println();
+
+        analyzeStrings();
         analyzeSymbols();
         analyzeFunctions();
         analyzeReferences();
 
-        report.close();
+        symbolsReport.close();
         stringsReport.close();
         functionsReport.close();
+        referencesReport.close();
 
         println();
-        println("Analysis complete.");
+        println("Analysis completed successfully.");
     }
 
-    private boolean containsInteresting(String text) {
+    private boolean interesting(String value) {
 
-        if (text == null) {
+        if (value == null) {
             return false;
         }
 
-        String lower = text.toLowerCase(Locale.ROOT);
+        String lower =
+            value.toLowerCase(Locale.ROOT);
 
         for (String term : TERMS) {
-            if (lower.contains(term.toLowerCase(Locale.ROOT))) {
+
+            if (
+                lower.contains(
+                    term.toLowerCase(Locale.ROOT)
+                )
+            ) {
                 return true;
             }
         }
@@ -110,56 +144,30 @@ public class TomsMessengerAnalysis extends GhidraScript {
         return false;
     }
 
-    private void analyzeMemoryBlocks() {
+    private void analyzeStrings() {
 
-        report.println("===== MEMORY BLOCKS =====");
+        Listing listing =
+            currentProgram.getListing();
 
-        Memory memory = currentProgram.getMemory();
-
-        for (MemoryBlock block : memory.getBlocks()) {
-
-            String name = block.getName();
-
-            if (containsInteresting(name)) {
-
-                String line =
-                    block.getName()
-                    + " "
-                    + block.getStart()
-                    + "-"
-                    + block.getEnd();
-
-                println("[MEMORY] " + line);
-                report.println(line);
-            }
-        }
-
-        report.println();
-    }
-
-    private void analyzeDefinedStrings() {
-
-        report.println("===== DEFINED STRINGS =====");
-        stringsReport.println("===== INTERESTING STRINGS =====");
-
-        Listing listing = currentProgram.getListing();
-
-        DataIterator iterator =
+        DataIterator dataIterator =
             listing.getDefinedData(true);
 
-        while (iterator.hasNext()) {
+        while (dataIterator.hasNext()) {
 
-            Data data = iterator.next();
+            Data data =
+                dataIterator.next();
 
-            Object value = data.getValue();
+            Object value =
+                data.getValue();
 
             if (value == null) {
                 continue;
             }
 
-            String text = value.toString();
+            String text =
+                value.toString();
 
-            if (!containsInteresting(text)) {
+            if (!interesting(text)) {
                 continue;
             }
 
@@ -172,31 +180,29 @@ public class TomsMessengerAnalysis extends GhidraScript {
 
             println("[STRING] " + line);
 
-            report.println(line);
             stringsReport.println(line);
         }
 
-        report.println();
-        stringsReport.println();
+        stringsReport.flush();
     }
 
     private void analyzeSymbols() {
 
-        report.println("===== SYMBOLS =====");
-
         SymbolTable table =
             currentProgram.getSymbolTable();
 
-        SymbolIterator symbols =
+        SymbolIterator iterator =
             table.getAllSymbols(true);
 
-        while (symbols.hasNext()) {
+        while (iterator.hasNext()) {
 
-            Symbol symbol = symbols.next();
+            Symbol symbol =
+                iterator.next();
 
-            String name = symbol.getName();
+            String name =
+                symbol.getName();
 
-            if (!containsInteresting(name)) {
+            if (!interesting(name)) {
                 continue;
             }
 
@@ -208,31 +214,29 @@ public class TomsMessengerAnalysis extends GhidraScript {
                 + name;
 
             println("[SYMBOL] " + line);
-            report.println(line);
+
+            symbolsReport.println(line);
         }
 
-        report.println();
+        symbolsReport.flush();
     }
 
     private void analyzeFunctions() {
 
-        functionsReport.println(
-            "===== INTERESTING FUNCTIONS ====="
-        );
+        FunctionIterator iterator =
+            currentProgram
+                .getFunctionManager()
+                .getFunctions(true);
 
-        FunctionIterator functions =
-            currentProgram.getFunctionManager()
-                         .getFunctions(true);
-
-        while (functions.hasNext()) {
+        while (iterator.hasNext()) {
 
             Function function =
-                functions.next();
+                iterator.next();
 
             String name =
                 function.getName();
 
-            if (!containsInteresting(name)) {
+            if (!interesting(name)) {
                 continue;
             }
 
@@ -242,56 +246,67 @@ public class TomsMessengerAnalysis extends GhidraScript {
                 + name;
 
             println("[FUNCTION] " + line);
+
             functionsReport.println(line);
         }
 
-        functionsReport.println();
+        functionsReport.flush();
     }
 
     private void analyzeReferences() {
 
-        report.println("===== REFERENCES TO INTERESTING STRINGS =====");
-
-        Listing listing = currentProgram.getListing();
+        Listing listing =
+            currentProgram.getListing();
 
         DataIterator iterator =
             listing.getDefinedData(true);
 
         while (iterator.hasNext()) {
 
-            Data data = iterator.next();
+            Data data =
+                iterator.next();
 
-            Object value = data.getValue();
+            Object value =
+                data.getValue();
 
             if (value == null) {
                 continue;
             }
 
-            String text = value.toString();
+            String text =
+                value.toString();
 
-            if (!containsInteresting(text)) {
+            if (!interesting(text)) {
                 continue;
             }
 
-            ReferenceIterator refs =
-                currentProgram.getReferenceManager()
-                    .getReferencesTo(data.getAddress());
+            ReferenceIterator references =
+                currentProgram
+                    .getReferenceManager()
+                    .getReferencesTo(
+                        data.getAddress()
+                    );
 
-            while (refs.hasNext()) {
+            while (references.hasNext()) {
 
-                Reference ref = refs.next();
+                Reference reference =
+                    references.next();
 
                 String line =
-                    "STRING: "
+                    "String: "
                     + text
-                    + " | FROM: "
-                    + ref.getFromAddress();
+                    + " | From: "
+                    + reference.getFromAddress();
 
-                println("[REFERENCE] " + line);
-                report.println(line);
+                println(
+                    "[REFERENCE] "
+                    + line
+                );
+
+                referencesReport.println(line);
             }
         }
 
-        report.println();
+        referencesReport.flush();
     }
-          }
+}
