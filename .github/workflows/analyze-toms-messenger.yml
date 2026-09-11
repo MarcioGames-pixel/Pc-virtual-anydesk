@@ -148,10 +148,6 @@ jobs:
 
           echo "GHIDRA_DIR=$GHIDRA_DIR" >> "$GITHUB_ENV"
 
-      - name: Test Ghidra
-        run: |
-          "$GHIDRA_DIR/support/analyzeHeadless" -help
-
       - name: Prepare script
         run: |
           mkdir -p ghidra_scripts
