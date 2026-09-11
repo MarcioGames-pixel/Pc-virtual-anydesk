@@ -1,4 +1,4 @@
-name: Analyze Tom's Messenger 1.1 with Ghidra
+name: Analyze Tom's Messenger 1.1
 
 on:
   workflow_dispatch:
@@ -20,34 +20,59 @@ jobs:
           sudo apt-get install -y \
             wget \
             unzip \
-            p7zip-full \
+            zip \
             file \
-            binutils
+            binutils \
+            python3
+
+          echo "=== Dependencies ==="
+          which wget
+          which unzip
+          which zip
+          which file
+          which strings
+          python3 --version
+          strings --version
 
       - name: Download Tom's Messenger 1.1 IPA
         run: |
+          set -e
+
           mkdir -p input
-          wget -O "input/Toms-Messenger-1.1.ipa" \
+
+          wget --show-progress \
+            -O "input/Toms-Messenger-1.1.ipa" \
             "https://archive.org/download/toms-messenger/iOS%20Version/Tom%27s%20Messenger%201.1%20%5BiOS4.1%5D.ipa"
 
-          ls -lh input/
+          echo "=== IPA ==="
+          ls -lh input/Toms-Messenger-1.1.ipa
+          file input/Toms-Messenger-1.1.ipa
 
       - name: Extract IPA
         run: |
+          set -e
+
+          rm -rf extracted
           mkdir -p extracted
 
           unzip -q \
             "input/Toms-Messenger-1.1.ipa" \
             -d extracted
 
-          echo "=== IPA contents ==="
-          find extracted -maxdepth 3 -type f | sort | head -200
+          echo "=== Extracted files ==="
+          find extracted -maxdepth 4 -type f | sort | head -300
 
       - name: Locate application
         id: app
         shell: bash
         run: |
-          APP="$(find extracted/Payload -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          set -e
+
+          APP="$(find extracted/Payload \
+            -maxdepth 1 \
+            -type d \
+            -name '*.app' \
+            | head -n 1)"
 
           if [ -z "$APP" ]; then
             echo "ERROR: .app not found"
@@ -55,24 +80,34 @@ jobs:
           fi
 
           echo "APP=$APP" >> "$GITHUB_OUTPUT"
-          echo "Application: $APP"
+
+          echo "Application:"
+          echo "$APP"
+
+          echo
+          echo "=== Application contents ==="
+          find "$APP" -maxdepth 2 -type f | sort
 
       - name: Locate Mach-O executable
         id: binary
         shell: bash
         run: |
+          set -e
+
           APP="${{ steps.app.outputs.APP }}"
 
-          EXEC="$(find "$APP" -maxdepth 1 -type f \
-            ! -name '*.plist' \
-            ! -name '*.png' \
-            ! -name '*.jpg' \
-            ! -name '*.strings' \
-            ! -name '*.nib' \
-            -exec file {} \; |
-            grep -E 'Mach-O.*executable|Mach-O.*dynamically' |
-            cut -d: -f1 |
-            head -n 1)"
+          EXEC=""
+
+          for FILE in "$APP"/*; do
+            if [ -f "$FILE" ]; then
+              TYPE="$(file "$FILE" || true)"
+
+              if echo "$TYPE" | grep -q "Mach-O"; then
+                EXEC="$FILE"
+                break
+              fi
+            fi
+          done
 
           if [ -z "$EXEC" ]; then
             echo "ERROR: Mach-O executable not found"
@@ -81,64 +116,167 @@ jobs:
 
           echo "EXEC=$EXEC" >> "$GITHUB_OUTPUT"
 
-          echo "=== Mach-O ==="
+          echo "=== Executable ==="
+          echo "$EXEC"
+
+          echo
           file "$EXEC"
 
-          echo "=== Architecture ==="
-          file "$EXEC"
-
-      - name: Create raw string report
+      - name: Extract IPA metadata
         run: |
+          set -e
+
           mkdir -p reports
 
           APP="${{ steps.app.outputs.APP }}"
+
+          echo "===== APP INFO =====" \
+            > reports/app-info.txt
+
+          echo "Application: $APP" \
+            >> reports/app-info.txt
+
+          echo \
+            >> reports/app-info.txt
+
+          echo "===== FILES =====" \
+            >> reports/app-info.txt
+
+          find "$APP" -maxdepth 2 -type f -printf '%p\n' \
+            >> reports/app-info.txt
+
+          echo \
+            >> reports/app-info.txt
+
+          echo "===== Info.plist =====" \
+            >> reports/app-info.txt
+
+          if [ -f "$APP/Info.plist" ]; then
+            strings "$APP/Info.plist" \
+              >> reports/app-info.txt || true
+          fi
+
+      - name: Extract raw strings
+        run: |
+          set -e
+
+          mkdir -p reports
+
           EXEC="${{ steps.binary.outputs.EXEC }}"
 
-          echo "Tom's Messenger 1.1" > reports/strings.txt
-          echo "Executable: $EXEC" >> reports/strings.txt
-          echo >> reports/strings.txt
-
-          echo "===== EXECUTABLE STRINGS =====" >> reports/strings.txt
-          strings -a -n 4 "$EXEC" >> reports/strings.txt || true
-
-          echo >> reports/strings.txt
-          echo "===== INTERESTING TERMS =====" >> reports/strings.txt
+          strings -a -n 4 "$EXEC" \
+            > reports/strings.txt || true
 
           grep -Ein \
-            'addon|add.?on|category|categories|wardrobe|inventory|storeinventory|background|gina|angela|tom|ben|pierre|ginger|documents|plist|purchase|unlock' \
+            'addon|add.?on|category|categories|wardrobe|inventory|storeinventory|background|gina|angela|tom|ben|pierre|ginger|documents|plist|purchase|purchased|unlock|unlocked|store|shop' \
             reports/strings.txt \
             > reports/interesting-strings.txt || true
 
-      - name: Download Ghidra
+          echo "=== Interesting strings ==="
+          head -200 reports/interesting-strings.txt || true
+
+      - name: Download latest Ghidra
+        shell: bash
         run: |
-          GHIDRA_VERSION="12.0.2"
-          GHIDRA_ZIP="ghidra_${GHIDRA_VERSION}_PUBLIC_20260320.zip"
+          set -e
 
-          wget -O "$GHIDRA_ZIP" \
-            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_20260320.zip"
+          GHIDRA_URL="$(
+            python3 - <<'PY'
+          import json
+          import urllib.request
 
-          unzip -q "$GHIDRA_ZIP"
+          url = "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest"
 
-          GHIDRA_DIR="$(find . -maxdepth 1 -type d -name 'ghidra_*_PUBLIC' | head -n 1)"
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "User-Agent": "github-actions"
+              }
+          )
+
+          with urllib.request.urlopen(request) as response:
+              data = json.load(response)
+
+          assets = data.get("assets", [])
+
+          for asset in assets:
+              name = asset.get("name", "")
+
+              if (
+                  name.endswith(".zip")
+                  and "PUBLIC" in name
+                  and "source" not in name.lower()
+              ):
+                  print(asset["browser_download_url"])
+                  break
+          else:
+              raise SystemExit(
+                  "No public Ghidra ZIP found"
+              )
+          PY
+          )"
+
+          echo "Ghidra download:"
+          echo "$GHIDRA_URL"
+
+          wget --show-progress \
+            -O ghidra.zip \
+            "$GHIDRA_URL"
+
+          echo "=== Ghidra ZIP ==="
+          ls -lh ghidra.zip
+
+          unzip -q ghidra.zip
+
+          GHIDRA_DIR="$(
+            find . \
+              -maxdepth 1 \
+              -type d \
+              -name 'ghidra_*_PUBLIC' \
+              | head -n 1
+          )"
 
           if [ -z "$GHIDRA_DIR" ]; then
             echo "ERROR: Ghidra directory not found"
+            find . -maxdepth 2 -type d | sort
             exit 1
           fi
 
+          GHIDRA_DIR="$(realpath "$GHIDRA_DIR")"
+
           echo "GHIDRA_DIR=$GHIDRA_DIR" >> "$GITHUB_ENV"
+
+          echo "Ghidra:"
+          echo "$GHIDRA_DIR"
+
+          echo
+          "$GHIDRA_DIR/support/analyzeHeadless" \
+            -help | head -40
 
       - name: Prepare Ghidra script
         run: |
+          set -e
+
           mkdir -p ghidra_scripts
-          cp tools/TomsMessengerAnalysis.java ghidra_scripts/
+
+          cp tools/TomsMessengerAnalysis.java \
+            ghidra_scripts/TomsMessengerAnalysis.java
+
+          ls -lh ghidra_scripts/
 
       - name: Run Ghidra headless analysis
         shell: bash
         run: |
-          mkdir -p ghidra-project reports
+          set -e
+
+          mkdir -p ghidra-project
+          mkdir -p reports
 
           EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          echo "=== Running Ghidra ==="
+          echo "Executable:"
+          echo "$EXEC"
 
           "$GHIDRA_DIR/support/analyzeHeadless" \
             "$GITHUB_WORKSPACE/ghidra-project" \
@@ -148,13 +286,12 @@ jobs:
             -postScript TomsMessengerAnalysis.java \
             -overwrite \
             -analysisTimeoutPerFile 900 \
-            -max-cpu 2 \
             -log "$GITHUB_WORKSPACE/reports/ghidra.log" \
             -scriptlog "$GITHUB_WORKSPACE/reports/ghidra-script.log"
 
-      - name: Generate Mach-O metadata
+      - name: Generate Mach-O information
         run: |
-          mkdir -p reports
+          set -e
 
           EXEC="${{ steps.binary.outputs.EXEC }}"
 
@@ -163,23 +300,102 @@ jobs:
             file "$EXEC"
 
             echo
-            echo "===== OTOOL / BINUTILS ====="
+            echo "===== STRINGS ====="
+            strings -a -n 4 "$EXEC" | head -1000 || true
 
-            if command -v otool >/dev/null 2>&1; then
-              otool -hv "$EXEC" || true
-              otool -l "$EXEC" || true
-            else
-              objdump -f "$EXEC" || true
-            fi
+            echo
+            echo "===== OBJDUMP ====="
+            objdump -f "$EXEC" || true
           } > reports/macho-info.txt
 
-      - name: Archive analysis
+      - name: Search extracted application for interesting files
+        run: |
+          set -e
+
+          APP="${{ steps.app.outputs.APP }}"
+
+          {
+            echo "===== POTENTIAL WARDROBE FILES ====="
+
+            find "$APP" \
+              -type f \
+              \( \
+                -iname '*addon*' \
+                -o -iname '*wardrobe*' \
+                -o -iname '*category*' \
+                -o -iname '*inventory*' \
+                -o -iname '*background*' \
+                -o -iname '*gina*' \
+                -o -iname '*angela*' \
+                -o -iname '*.plist' \
+              \) \
+              -print
+
+            echo
+            echo "===== ALL PLIST FILES ====="
+
+            find "$APP" \
+              -type f \
+              -iname '*.plist' \
+              -print
+
+          } > reports/application-data-search.txt
+
+      - name: Create extracted IPA ZIP
+        run: |
+          set -e
+
+          mkdir -p artifacts
+
+          echo "Creating extracted IPA archive..."
+
+          cd extracted
+
+          zip -r -q \
+            "../artifacts/Toms-Messenger-1.1-extracted.zip" \
+            Payload
+
+          cd ..
+
+          ls -lh \
+            artifacts/Toms-Messenger-1.1-extracted.zip
+
+      - name: Create complete analysis ZIP
+        run: |
+          set -e
+
+          mkdir -p artifacts
+
+          rm -f artifacts/Toms-Messenger-1.1-analysis.zip
+
+          zip -r -q \
+            artifacts/Toms-Messenger-1.1-analysis.zip \
+            reports \
+            ghidra_scripts \
+            ghidra-project
+
+          ls -lh artifacts/
+
+      - name: Upload extracted application
         uses: actions/upload-artifact@v4
         with:
-          name: toms-messenger-1.1-ghidra-analysis
-          path: |
-            reports/
-            ghidra-project/
-            extracted/Payload/*.app/
+          name: Toms-Messenger-1.1-extracted
+          path: artifacts/Toms-Messenger-1.1-extracted.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload Ghidra analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toms-Messenger-1.1-Ghidra-analysis
+          path: artifacts/Toms-Messenger-1.1-analysis.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload reports separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toms-Messenger-1.1-reports
+          path: reports/
           retention-days: 30
           compression-level: 9
