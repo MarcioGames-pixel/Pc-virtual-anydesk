@@ -1,0 +1,186 @@
+name: Analyze Tom's Messenger 1.1 with Ghidra
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            wget \
+            unzip \
+            p7zip-full \
+            file \
+            binutils \
+            strings
+
+      - name: Download Tom's Messenger 1.1 IPA
+        run: |
+          mkdir -p input
+          wget -O "input/Toms-Messenger-1.1.ipa" \
+            "https://archive.org/download/toms-messenger/iOS%20Version/Tom%27s%20Messenger%201.1%20%5BiOS4.1%5D.ipa"
+
+          ls -lh input/
+
+      - name: Extract IPA
+        run: |
+          mkdir -p extracted
+
+          unzip -q \
+            "input/Toms-Messenger-1.1.ipa" \
+            -d extracted
+
+          echo "=== IPA contents ==="
+          find extracted -maxdepth 3 -type f | sort | head -200
+
+      - name: Locate application
+        id: app
+        shell: bash
+        run: |
+          APP="$(find extracted/Payload -maxdepth 1 -type d -name '*.app' | head -n 1)"
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: .app not found"
+            exit 1
+          fi
+
+          echo "APP=$APP" >> "$GITHUB_OUTPUT"
+          echo "Application: $APP"
+
+      - name: Locate Mach-O executable
+        id: binary
+        shell: bash
+        run: |
+          APP="${{ steps.app.outputs.APP }}"
+
+          EXEC="$(find "$APP" -maxdepth 1 -type f \
+            ! -name '*.plist' \
+            ! -name '*.png' \
+            ! -name '*.jpg' \
+            ! -name '*.strings' \
+            ! -name '*.nib' \
+            -exec file {} \; |
+            grep -E 'Mach-O.*executable|Mach-O.*dynamically' |
+            cut -d: -f1 |
+            head -n 1)"
+
+          if [ -z "$EXEC" ]; then
+            echo "ERROR: Mach-O executable not found"
+            exit 1
+          fi
+
+          echo "EXEC=$EXEC" >> "$GITHUB_OUTPUT"
+
+          echo "=== Mach-O ==="
+          file "$EXEC"
+
+          echo "=== Architecture ==="
+          file "$EXEC"
+
+      - name: Create raw string report
+        run: |
+          mkdir -p reports
+
+          APP="${{ steps.app.outputs.APP }}"
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          echo "Tom's Messenger 1.1" > reports/strings.txt
+          echo "Executable: $EXEC" >> reports/strings.txt
+          echo >> reports/strings.txt
+
+          echo "===== EXECUTABLE STRINGS =====" >> reports/strings.txt
+          strings -a -n 4 "$EXEC" >> reports/strings.txt || true
+
+          echo >> reports/strings.txt
+          echo "===== INTERESTING TERMS =====" >> reports/strings.txt
+
+          grep -Ein \
+            'addon|add.?on|category|categories|wardrobe|inventory|storeinventory|background|gina|angela|tom|ben|pierre|ginger|documents|plist|purchase|unlock' \
+            reports/strings.txt \
+            > reports/interesting-strings.txt || true
+
+      - name: Download Ghidra
+        run: |
+          GHIDRA_VERSION="12.0.2"
+          GHIDRA_ZIP="ghidra_${GHIDRA_VERSION}_PUBLIC_20260320.zip"
+
+          wget -O "$GHIDRA_ZIP" \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_20260320.zip"
+
+          unzip -q "$GHIDRA_ZIP"
+
+          GHIDRA_DIR="$(find . -maxdepth 1 -type d -name 'ghidra_*_PUBLIC' | head -n 1)"
+
+          if [ -z "$GHIDRA_DIR" ]; then
+            echo "ERROR: Ghidra directory not found"
+            exit 1
+          fi
+
+          echo "GHIDRA_DIR=$GHIDRA_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Ghidra script
+        run: |
+          mkdir -p ghidra_scripts
+          cp tools/TomsMessengerAnalysis.java ghidra_scripts/
+
+      - name: Run Ghidra headless analysis
+        shell: bash
+        run: |
+          mkdir -p ghidra-project reports
+
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          "$GHIDRA_DIR/support/analyzeHeadless" \
+            "$GITHUB_WORKSPACE/ghidra-project" \
+            "TomsMessenger11" \
+            -import "$EXEC" \
+            -scriptPath "$GITHUB_WORKSPACE/ghidra_scripts" \
+            -postScript TomsMessengerAnalysis.java \
+            -overwrite \
+            -analysisTimeoutPerFile 900 \
+            -max-cpu 2 \
+            -log "$GITHUB_WORKSPACE/reports/ghidra.log" \
+            -scriptlog "$GITHUB_WORKSPACE/reports/ghidra-script.log"
+
+      - name: Generate Mach-O metadata
+        run: |
+          mkdir -p reports
+
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          {
+            echo "===== FILE ====="
+            file "$EXEC"
+
+            echo
+            echo "===== OTOOL / BINUTILS ====="
+
+            if command -v otool >/dev/null 2>&1; then
+              otool -hv "$EXEC" || true
+              otool -l "$EXEC" || true
+            else
+              objdump -f "$EXEC" || true
+            fi
+          } > reports/macho-info.txt
+
+      - name: Archive analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: toms-messenger-1.1-ghidra-analysis
+          path: |
+            reports/
+            ghidra-project/
+            extracted/Payload/*.app/
+          retention-days: 30
+          compression-level: 9
