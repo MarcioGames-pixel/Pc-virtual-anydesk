@@ -1,0 +1,397 @@
+name: Decompile Tom's Messenger 1.1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            wget \
+            unzip \
+            zip \
+            file \
+            binutils \
+            python3 \
+            clang \
+            llvm
+
+      - name: Download IPA
+        run: |
+          mkdir -p input
+          wget --show-progress \
+            -O input/Toms-Messenger-1.1.ipa \
+            "https://archive.org/download/toms-messenger/iOS%20Version/Tom%27s%20Messenger%201.1%20%5BiOS4.1%5D.ipa"
+
+      - name: Extract IPA
+        run: |
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q input/Toms-Messenger-1.1.ipa -d extracted
+
+      - name: Locate application
+        id: app
+        run: |
+          APP="$(find extracted/Payload -maxdepth 1 -type d -name '*.app' | head -n 1)"
+
+          if [ -z "$APP" ]; then
+            exit 1
+          fi
+
+          echo "APP=$APP" >> "$GITHUB_OUTPUT"
+
+      - name: Locate Mach-O
+        id: binary
+        run: |
+          APP="${{ steps.app.outputs.APP }}"
+          EXEC=""
+
+          while IFS= read -r file; do
+            if file "$file" | grep -q "Mach-O"; then
+              EXEC="$file"
+              break
+            fi
+          done < <(find "$APP" -type f)
+
+          if [ -z "$EXEC" ]; then
+            exit 1
+          fi
+
+          echo "EXEC=$EXEC" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare source tree
+        run: |
+          rm -rf source
+          mkdir -p \
+            source/classes \
+            source/functions \
+            source/strings \
+            source/objc \
+            source/disassembly \
+            source/resources \
+            source/metadata
+
+      - name: Extract application metadata
+        run: |
+          APP="${{ steps.app.outputs.APP }}"
+
+          cp -a "$APP/." source/resources/
+
+          if [ -f "$APP/Info.plist" ]; then
+            cp "$APP/Info.plist" source/metadata/Info.plist
+          fi
+
+          find "$APP" -type f \
+            -print \
+            > source/metadata/files.txt
+
+          file "${{ steps.binary.outputs.EXEC }}" \
+            > source/metadata/executable-type.txt
+
+      - name: Extract strings
+        run: |
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          strings -a -n 3 "$EXEC" \
+            > source/strings/all.txt
+
+          grep -Ein \
+            'addon|add.?on|preview|animation|icon|wardrobe|inventory|category|store|purchase|download|documents|plist|http|https|cdn|tom|angela|ben|gina|ginger|pierre' \
+            source/strings/all.txt \
+            > source/strings/interesting.txt || true
+
+      - name: Extract Objective-C information
+        run: |
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          nm -m "$EXEC" \
+            > source/objc/nm.txt \
+            || true
+
+          nm -a "$EXEC" \
+            > source/objc/nm-all.txt \
+            || true
+
+          strings -a "$EXEC" |
+            grep -E '^[+-]\[[^]]+\]' \
+            > source/objc/selectors.txt \
+            || true
+
+          strings -a "$EXEC" |
+            grep -E '^[A-Za-z_][A-Za-z0-9_]*$' |
+            grep -E 'Manager|Controller|View|Store|Addon|AddOn|Asset|Download|Wardrobe|Category|Inventory' \
+            > source/objc/classes.txt \
+            || true
+
+      - name: Disassemble
+        run: |
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          llvm-objdump \
+            --macho \
+            --disassemble \
+            --no-show-raw-insn \
+            "$EXEC" \
+            > source/disassembly/main.asm \
+            || true
+
+          llvm-objdump \
+            --macho \
+            --private-headers \
+            "$EXEC" \
+            > source/disassembly/headers.txt \
+            || true
+
+          llvm-objdump \
+            --macho \
+            --section="__TEXT,__cstring" \
+            "$EXEC" \
+            > source/disassembly/cstrings.txt \
+            || true
+
+      - name: Download Ghidra
+        run: |
+          GHIDRA_URL="$(
+            python3 - <<'PY'
+          import json
+          import urllib.request
+
+          url = "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest"
+
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "github-actions"}
+          )
+
+          with urllib.request.urlopen(req) as response:
+              data = json.load(response)
+
+          for asset in data.get("assets", []):
+              name = asset.get("name", "")
+
+              if (
+                  name.endswith(".zip")
+                  and "PUBLIC" in name
+                  and "source" not in name.lower()
+              ):
+                  print(asset["browser_download_url"])
+                  break
+          else:
+              raise SystemExit("Ghidra ZIP not found")
+          PY
+          )"
+
+          wget --show-progress \
+            -O ghidra.zip \
+            "$GHIDRA_URL"
+
+          unzip -q ghidra.zip
+
+          GHIDRA_DIR="$(
+            find . \
+              -maxdepth 1 \
+              -type d \
+              -name 'ghidra_*_PUBLIC' \
+              | head -n 1
+          )"
+
+          if [ -z "$GHIDRA_DIR" ]; then
+            exit 1
+          fi
+
+          echo "GHIDRA_DIR=$(realpath "$GHIDRA_DIR")" >> "$GITHUB_ENV"
+
+      - name: Create Ghidra script
+        run: |
+          mkdir -p ghidra_scripts
+
+          cat > ghidra_scripts/ExportDecompiled.java <<'EOF'
+          import ghidra.app.decompiler.DecompInterface;
+          import ghidra.app.decompiler.DecompileResults;
+          import ghidra.program.model.listing.Function;
+          import ghidra.program.model.listing.FunctionIterator;
+          import ghidra.program.model.listing.Program;
+          import ghidra.util.task.ConsoleTaskMonitor;
+          import java.io.File;
+          import java.io.FileWriter;
+          import java.io.PrintWriter;
+
+          public class ExportDecompiled extends ghidra.app.script.GhidraScript {
+
+              @Override
+              public void run() throws Exception {
+
+                  Program program = currentProgram;
+
+                  File root = new File(
+                      System.getenv("GITHUB_WORKSPACE"),
+                      "source/functions"
+                  );
+
+                  root.mkdirs();
+
+                  DecompInterface decompiler =
+                      new DecompInterface();
+
+                  decompiler.openProgram(program);
+
+                  FunctionIterator functions =
+                      program.getFunctionManager()
+                          .getFunctions(true);
+
+                  int count = 0;
+
+                  for (Function function : functions) {
+
+                      try {
+
+                          DecompileResults result =
+                              decompiler.decompileFunction(
+                                  function,
+                                  60,
+                                  new ConsoleTaskMonitor()
+                              );
+
+                          String code =
+                              result.getDecompiledFunction() == null
+                                  ? ""
+                                  : result.getDecompiledFunction()
+                                      .getC();
+
+                          String name =
+                              function.getName()
+                                  .replaceAll(
+                                      "[^A-Za-z0-9_.-]",
+                                      "_"
+                                  );
+
+                          File output =
+                              new File(
+                                  root,
+                                  String.format(
+                                      "%06d_%s.c",
+                                      count++,
+                                      name
+                                  )
+                              );
+
+                          try (
+                              PrintWriter writer =
+                                  new PrintWriter(
+                                      new FileWriter(output)
+                                  )
+                          ) {
+
+                              writer.println(
+                                  "/* "
+                                  + function.getEntryPoint()
+                                  + " */"
+                              );
+
+                              writer.println();
+
+                              writer.println(code);
+                          }
+
+                      } catch (Exception ignored) {
+                      }
+                  }
+
+                  decompiler.dispose();
+
+                  File report =
+                      new File(
+                          System.getenv("GITHUB_WORKSPACE"),
+                          "source/metadata/decompiled-count.txt"
+                      );
+
+                  try (
+                      PrintWriter writer =
+                          new PrintWriter(report)
+                  ) {
+                      writer.println(count);
+                  }
+              }
+          }
+          EOF
+
+      - name: Run Ghidra
+        run: |
+          set -e
+
+          rm -rf ghidra-project
+          mkdir -p ghidra-project
+
+          EXEC="${{ steps.binary.outputs.EXEC }}"
+
+          "$GHIDRA_DIR/support/analyzeHeadless" \
+            "$GITHUB_WORKSPACE/ghidra-project" \
+            "TomMessenger11" \
+            -import "$EXEC" \
+            -scriptPath "$GITHUB_WORKSPACE/ghidra_scripts" \
+            -postScript ExportDecompiled.java \
+            -overwrite \
+            -analysisTimeoutPerFile 1800 \
+            -max-cpu 2 \
+            -log "$GITHUB_WORKSPACE/source/metadata/ghidra.log" \
+            -scriptlog "$GITHUB_WORKSPACE/source/metadata/ghidra-script.log"
+
+      - name: Generate source index
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          root = Path("source")
+          files = sorted(
+              p for p in root.rglob("*")
+              if p.is_file()
+          )
+
+          with open(
+              root / "SOURCE_INDEX.txt",
+              "w"
+          ) as f:
+
+              for p in files:
+                  f.write(
+                      str(p.relative_to(root))
+                      + "\n"
+                  )
+          PY
+
+      - name: Create source archive
+        run: |
+          mkdir -p artifacts
+
+          zip -r -q \
+            artifacts/Toms-Messenger-1.1-source.zip \
+            source \
+            ghidra-project \
+            ghidra_scripts
+
+      - name: Upload reconstructed source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toms-Messenger-1.1-source
+          path: artifacts/Toms-Messenger-1.1-source.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload source directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toms-Messenger-1.1-source-files
+          path: source/
+          retention-days: 30
+          compression-level: 9
