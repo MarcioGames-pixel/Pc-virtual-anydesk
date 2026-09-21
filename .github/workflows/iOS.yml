@@ -15,6 +15,7 @@ jobs:
       - name: Instalar dependências
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             ninja-build \
@@ -44,15 +45,12 @@ jobs:
 
           cd qemu-ios
 
-          echo "===== REPOSITÓRIO ====="
+          echo "=========================================="
+          echo "QEMU-iOS"
+          echo "=========================================="
+
           git remote -v
-
-          echo
-          echo "===== COMMIT ====="
           git rev-parse HEAD
-
-          echo
-          echo "===== BRANCH ====="
           git branch --show-current
 
       - name: Configurar QEMU
@@ -60,11 +58,8 @@ jobs:
         run: |
           rm -rf build
           mkdir -p build
-          cd build
 
-          echo "=========================================="
-          echo "CONFIGURANDO QEMU"
-          echo "=========================================="
+          cd build
 
           ../configure \
             --enable-sdl \
@@ -78,105 +73,121 @@ jobs:
             --enable-pie
 
           echo
-          echo "===== VERIFICANDO CONFIGURE ====="
+          echo "=========================================="
+          echo "CONFIGURE CONCLUÍDO"
+          echo "=========================================="
 
           test -f Makefile
 
-          echo "Makefile criado:"
+          pwd
           ls -lh Makefile
 
       - name: Compilar QEMU até o executável
         working-directory: qemu-ios/build
         run: |
           echo "=========================================="
-          echo "COMPILANDO QEMU"
+          echo "INICIANDO COMPILAÇÃO"
           echo "=========================================="
 
-          echo
-          echo "Diretório:"
-          pwd
-
-          echo
-          echo "Comando:"
-          echo 'make -j"$(nproc)"'
-
-          echo
-
-          make -j"$(nproc)"
+          make -j"$(nproc)" V=1
 
           echo
           echo "=========================================="
           echo "COMPILAÇÃO CONCLUÍDA"
           echo "=========================================="
 
-          QEMU="$PWD/arm-softmmu/qemu-system-arm"
+          echo
+          echo "PROCURANDO qemu-system-arm..."
 
-          if [ ! -x "$QEMU" ]; then
+          QEMU="$(find "$PWD" -type f -name 'qemu-system-arm' | head -n 1)"
+
+          if [ -z "$QEMU" ]; then
+            echo
             echo "ERRO: qemu-system-arm não foi encontrado."
-
+            echo
+            echo "Arquivos qemu encontrados:"
+            find "$PWD" -type f -name '*qemu-system*' -print
             echo
             echo "Executáveis encontrados:"
-            find . -type f -name 'qemu-system-arm' -print
-
+            find "$PWD" -type f -perm -111 -print | head -200
             exit 1
           fi
 
-          echo "$QEMU" > ../../qemu_path.txt
+          chmod +x "$QEMU"
 
           echo
-          echo "===== EXECUTÁVEL ====="
-          echo "$QEMU"
+          echo "=========================================="
+          echo "EXECUTÁVEL ENCONTRADO"
+          echo "=========================================="
 
           echo
-          echo "===== TAMANHO ====="
+          echo "CAMINHO:"
+          realpath "$QEMU"
+
+          echo
+          echo "ARQUIVO:"
           ls -lh "$QEMU"
 
           echo
-          echo "===== TIPO ====="
+          echo "TIPO:"
           file "$QEMU"
 
           echo
-          echo "===== VERSÃO ====="
+          echo "VERSÃO:"
           "$QEMU" --version
 
           echo
-          echo "===== SHA256 ====="
+          echo "SHA256:"
           sha256sum "$QEMU"
+
+          realpath "$QEMU" > ../../qemu_path.txt
+
+          echo
+          echo "CAMINHO SALVO:"
+          cat ../../qemu_path.txt
 
       - name: Verificar máquina iPod-Touch
         run: |
           QEMU="$(cat qemu_path.txt)"
 
-          echo "=========================================="
-          echo "VERIFICANDO MÁQUINA iPod-Touch"
-          echo "=========================================="
+          echo "QEMU:"
+          echo "$QEMU"
 
-          "$QEMU" -M help | grep -i 'iPod\|Touch' || {
+          echo
+          echo "MÁQUINAS DISPONÍVEIS:"
+
+          "$QEMU" -M help | grep -iE 'ipod|touch' || {
             echo "ERRO: máquina iPod-Touch não encontrada."
+            "$QEMU" -M help
             exit 1
           }
 
-      - name: Verificar display
+      - name: Verificar suporte VNC
         run: |
           QEMU="$(cat qemu_path.txt)"
 
-          echo "===== DISPLAY ====="
+          echo "=========================================="
+          echo "DISPLAY"
+          echo "=========================================="
+
           "$QEMU" -display help || true
 
           echo
-          echo "===== VNC ====="
+          echo "=========================================="
+          echo "VNC"
+          echo "=========================================="
+
           "$QEMU" -vnc help || true
 
-      - name: Criar diretório dos arquivos
+      - name: Criar diretório iOS
         run: |
+          rm -rf ios_files
           mkdir -p ios_files
 
       - name: Baixar BootROM
         working-directory: ios_files
         run: |
-          curl -fL \
-            --retry 5 \
-            --retry-delay 3 \
+          curl -fL --retry 5 --retry-delay 3 \
             -o bootrom_240_4 \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/bootrom_240_4
 
@@ -188,9 +199,7 @@ jobs:
       - name: Baixar iBoot
         working-directory: ios_files
         run: |
-          curl -fL \
-            --retry 5 \
-            --retry-delay 3 \
+          curl -fL --retry 5 --retry-delay 3 \
             -o iBoot.bin \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/iBoot.bin
 
@@ -202,9 +211,7 @@ jobs:
       - name: Baixar NOR
         working-directory: ios_files
         run: |
-          curl -fL \
-            --retry 5 \
-            --retry-delay 3 \
+          curl -fL --retry 5 --retry-delay 3 \
             -o nor_7E18.bin \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nor_7E18.bin
 
@@ -216,9 +223,7 @@ jobs:
       - name: Baixar NAND
         working-directory: ios_files
         run: |
-          curl -fL \
-            --retry 5 \
-            --retry-delay 3 \
+          curl -fL --retry 5 --retry-delay 3 \
             -o nand-canonical.tar.gz \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nand-canonical.tar.gz
 
@@ -236,35 +241,14 @@ jobs:
           tar -xzf nand-canonical.tar.gz -C nand
 
           echo "=========================================="
-          echo "ARQUIVOS NAND"
+          echo "NAND EXTRAÍDA"
           echo "=========================================="
 
-          find nand -maxdepth 4 -type f | head -100
-
-          test -d nand
-
-      - name: Verificar arquivos do iPod
-        working-directory: ios_files
-        run: |
-          echo "=========================================="
-          echo "VERIFICANDO ARQUIVOS"
-          echo "=========================================="
-
-          test -s bootrom_240_4
-          test -s iBoot.bin
-          test -s nor_7E18.bin
-          test -d nand
-
-          echo "BootROM: OK"
-          echo "iBoot: OK"
-          echo "NOR: OK"
-          echo "NAND: OK"
+          find nand -maxdepth 4 -type f -print | head -200
 
       - name: Instalar Bore
         run: |
-          curl -fL \
-            --retry 5 \
-            --retry-delay 3 \
+          curl -fL --retry 5 --retry-delay 3 \
             -o bore.tar.gz \
             https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
 
@@ -274,32 +258,20 @@ jobs:
 
           sudo mv bore /usr/local/bin/bore
 
+          echo "Bore:"
           bore --version
 
-      - name: Iniciar QEMU com VNC
+      - name: Iniciar QEMU
         working-directory: ios_files
         run: |
           QEMU="$(cat ../qemu_path.txt)"
 
           echo "=========================================="
-          echo "INICIANDO iPod TOUCH 2G"
+          echo "INICIANDO QEMU-iOS"
           echo "=========================================="
 
-          echo
           echo "QEMU:"
           echo "$QEMU"
-
-          echo
-          echo "Comando:"
-          echo "$QEMU \\"
-          echo "  -M iPod-Touch,bootrom=bootrom_240_4,nand=nand,nor=nor_7E18.bin \\"
-          echo "  -serial mon:stdio \\"
-          echo "  -cpu max \\"
-          echo "  -m 2G \\"
-          echo "  -d unimp,guest_errors \\"
-          echo "  -vnc :0"
-
-          echo
 
           "$QEMU" \
             -M iPod-Touch,bootrom=bootrom_240_4,nand=nand,nor=nor_7E18.bin \
@@ -312,35 +284,45 @@ jobs:
 
           echo $! > qemu.pid
 
+          echo "PID:"
+          cat qemu.pid
+
+          echo
+          echo "Aguardando QEMU..."
+
           sleep 15
 
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "QEMU encerrou durante a inicialização."
+            echo "ERRO: QEMU encerrou."
 
             echo
-            echo "===== QEMU LOG ====="
+            echo "LOG DO QEMU:"
             cat qemu.log
 
             exit 1
           fi
 
+          echo
           echo "QEMU ONLINE"
-          echo "PID: $(cat qemu.pid)"
 
-      - name: Verificar VNC
+          echo
+          echo "PROCESSO:"
+          ps -p "$(cat qemu.pid)" -f || true
+
+      - name: Verificar servidor VNC
         working-directory: ios_files
         run: |
           echo "=========================================="
-          echo "VERIFICANDO VNC"
+          echo "AGUARDANDO VNC :5900"
           echo "=========================================="
 
-          for i in $(seq 1 15); do
+          for i in $(seq 1 30); do
             if ss -lnt | grep -q ':5900'; then
-              echo "VNC ONLINE na porta 5900."
+              echo "VNC ONLINE NA PORTA 5900"
               break
             fi
 
-            echo "Aguardando VNC... $i/15"
+            echo "Tentativa $i/30..."
             sleep 2
           done
 
@@ -348,15 +330,19 @@ jobs:
             echo "ERRO: VNC não abriu a porta 5900."
 
             echo
-            echo "===== QEMU LOG ====="
-            tail -300 qemu.log
+            echo "PORTAS:"
+            ss -lnt || true
+
+            echo
+            echo "LOG DO QEMU:"
+            cat qemu.log
 
             exit 1
           fi
 
           echo
-          echo "===== PORTA ====="
-          ss -lntp | grep ':5900' || true
+          echo "VNC:"
+          ss -lnt | grep ':5900'
 
       - name: Iniciar noVNC
         working-directory: ios_files
@@ -376,10 +362,10 @@ jobs:
           sleep 5
 
           if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
-            echo "noVNC/websockify encerrou."
+            echo "ERRO: noVNC/websockify encerrou."
 
             echo
-            echo "===== NOVNC LOG ====="
+            echo "LOG NOVNC:"
             cat novnc.log
 
             exit 1
@@ -387,11 +373,7 @@ jobs:
 
           echo "noVNC ONLINE"
 
-          echo
-          echo "===== PORTA ====="
-          ss -lntp | grep ':6080' || true
-
-      - name: Testar noVNC localmente
+      - name: Verificar noVNC
         working-directory: ios_files
         run: |
           echo "=========================================="
@@ -404,17 +386,17 @@ jobs:
 
           test -s /tmp/vnc.html
 
-          echo "Página noVNC respondeu corretamente."
+          echo "noVNC HTTP OK"
 
           echo
-          echo "Tamanho:"
-          wc -c /tmp/vnc.html
+          echo "PORTA:"
+          ss -lnt | grep ':6080'
 
       - name: Expor VNC pelo Bore
         working-directory: ios_files
         run: |
           echo "=========================================="
-          echo "ABRINDO BORE VNC"
+          echo "BORE VNC"
           echo "=========================================="
 
           bore local 5900 \
@@ -424,13 +406,11 @@ jobs:
 
           echo $! > bore-vnc.pid
 
-          sleep 5
+          sleep 8
 
           if ! kill -0 "$(cat bore-vnc.pid)" 2>/dev/null; then
-            echo "Bore VNC encerrou."
-
+            echo "ERRO: Bore VNC encerrou."
             cat bore-vnc.log
-
             exit 1
           fi
 
@@ -440,7 +420,7 @@ jobs:
         working-directory: ios_files
         run: |
           echo "=========================================="
-          echo "ABRINDO BORE NOVNC"
+          echo "BORE NOVNC"
           echo "=========================================="
 
           bore local 6080 \
@@ -453,36 +433,70 @@ jobs:
           sleep 10
 
           if ! kill -0 "$(cat bore-novnc.pid)" 2>/dev/null; then
-            echo "Bore noVNC encerrou."
-
+            echo "ERRO: Bore noVNC encerrou."
             cat bore-novnc.log
-
             exit 1
           fi
 
           echo
           echo "=========================================="
-          echo "IPOD TOUCH 2G ONLINE"
+          echo "ACESSO AO IPOD TOUCH 2G"
           echo "=========================================="
+
+          cat bore-novnc.log
+
           echo
           echo "VNC:"
           echo "bore.pub:5900"
+
           echo
           echo "NOVNC:"
-          echo "http://bore.pub:6080/vnc.html?autoconnect=true&host=bore.pub&port=6080"
+          echo "http://bore.pub:6080/vnc.html?autoconnect=true"
+
           echo
+          echo "NOVNC COM HOST:"
+          echo "http://bore.pub:6080/vnc.html?autoconnect=true&host=bore.pub&port=5900"
+
+      - name: Diagnóstico final
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "DIAGNÓSTICO FINAL"
           echo "=========================================="
 
-      - name: Mostrar executável compilado
-        run: |
-          QEMU="$(cat qemu_path.txt)"
+          echo
+          echo "PROCESSOS:"
+          ps aux | grep -E 'qemu-system-arm|websockify|bore' | grep -v grep || true
 
+          echo
+          echo "PORTAS:"
+          ss -lnt | grep -E ':5900|:6080' || true
+
+          echo
+          echo "QEMU PID:"
+          cat qemu.pid || true
+
+          echo
+          echo "NOVNC PID:"
+          cat novnc.pid || true
+
+          echo
+          echo "BORE VNC PID:"
+          cat bore-vnc.pid || true
+
+          echo
+          echo "BORE NOVNC PID:"
+          cat bore-novnc.pid || true
+
+          echo
           echo "=========================================="
           echo "EXECUTÁVEL COMPILADO"
           echo "=========================================="
 
+          QEMU="$(cat ../qemu_path.txt)"
+
           echo
-          echo "PATH:"
+          echo "CAMINHO:"
           echo "$QEMU"
 
           echo
@@ -503,87 +517,19 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "BUILD OK"
+          echo "FIM DO DIAGNÓSTICO"
           echo "=========================================="
 
-      - name: Verificar serviços
-        working-directory: ios_files
-        run: |
-          echo "=========================================="
-          echo "PROCESSOS"
-          echo "=========================================="
+      - name: Publicar executável QEMU
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-system-arm-ipod-touch-2g
+          path: qemu-ios/build/qemu-system-arm
+          if-no-files-found: warn
+          retention-days: 7
 
-          ps aux | grep -E \
-            'qemu-system-arm|websockify|bore' \
-            | grep -v grep || true
-
-          echo
-          echo "=========================================="
-          echo "PORTAS"
-          echo "=========================================="
-
-          ss -lntp | grep -E ':5900|:6080' || true
-
-          echo
-          echo "=========================================="
-          echo "QEMU LOG"
-          echo "=========================================="
-
-          tail -100 qemu.log || true
-
-          echo
-          echo "=========================================="
-          echo "NOVNC LOG"
-          echo "=========================================="
-
-          tail -100 novnc.log || true
-
-      - name: Manter execução
-        working-directory: ios_files
-        run: |
-          while true; do
-
-            if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-              echo "QEMU encerrou."
-
-              echo "===== QEMU LOG ====="
-              cat qemu.log
-
-              exit 1
-            fi
-
-            if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
-              echo "noVNC encerrou."
-
-              echo "===== NOVNC LOG ====="
-              cat novnc.log
-
-              exit 1
-            fi
-
-            if ! kill -0 "$(cat bore-vnc.pid)" 2>/dev/null; then
-              echo "Bore VNC encerrou."
-
-              echo "===== BORE VNC LOG ====="
-              cat bore-vnc.log
-
-              exit 1
-            fi
-
-            if ! kill -0 "$(cat bore-novnc.pid)" 2>/dev/null; then
-              echo "Bore noVNC encerrou."
-
-              echo "===== BORE NOVNC LOG ====="
-              cat bore-novnc.log
-
-              exit 1
-            fi
-
-            sleep 10
-
-          done
-
-      - name: Logs
+      - name: Publicar logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -594,4 +540,68 @@ jobs:
             ios_files/bore-vnc.log
             ios_files/bore-novnc.log
             qemu_path.txt
+          if-no-files-found: warn
           retention-days: 7
+
+      - name: Manter execução
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "EMULADOR ONLINE"
+          echo "=========================================="
+
+          echo
+          echo "noVNC:"
+          echo "http://bore.pub:6080/vnc.html?autoconnect=true"
+
+          echo
+          echo "VNC:"
+          echo "bore.pub:5900"
+
+          echo
+          echo "Aguardando..."
+
+          while true; do
+
+            if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+              echo "QEMU encerrou."
+
+              echo
+              echo "LOG DO QEMU:"
+              cat qemu.log
+
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+              echo "noVNC encerrou."
+
+              echo
+              echo "LOG DO NOVNC:"
+              cat novnc.log
+
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat bore-vnc.pid)" 2>/dev/null; then
+              echo "Bore VNC encerrou."
+
+              echo
+              echo "LOG BORE VNC:"
+              cat bore-vnc.log
+
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat bore-novnc.pid)" 2>/dev/null; then
+              echo "Bore noVNC encerrou."
+
+              echo
+              echo "LOG BORE NOVNC:"
+              cat bore-novnc.log
+
+              exit 1
+            fi
+
+            sleep 10
+          done
