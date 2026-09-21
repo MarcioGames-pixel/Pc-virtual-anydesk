@@ -36,6 +36,7 @@ jobs:
             libssl3 \
             libsdl2-2.0-0 \
             libsndio7.0 \
+            qemu-system-common \
             novnc \
             websockify
 
