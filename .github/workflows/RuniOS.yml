@@ -1,0 +1,257 @@
+name: Preparar pacote QEMU-iOS iPod touch 2G
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            ca-certificates \
+            unzip \
+            tar \
+            gzip
+
+      - name: Criar estrutura
+        run: |
+          rm -rf package
+          rm -rf previous-artifact.zip
+          mkdir -p package/nand
+
+      - name: Baixar artifact anterior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=========================================="
+          echo "BAIXANDO ARTIFACT 10659859280"
+          echo "=========================================="
+
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o previous-artifact.zip \
+            "https://api.github.com/repos/MarcioGames-pixel/Pc-virtual-anydesk/actions/artifacts/10659859280/zip"
+
+          test -s previous-artifact.zip
+
+          echo
+          echo "Artifact baixado:"
+          ls -lh previous-artifact.zip
+
+      - name: Extrair QEMU
+        run: |
+          echo "=========================================="
+          echo "EXTRAINDO ARTIFACT"
+          echo "=========================================="
+
+          rm -rf previous-artifact
+          mkdir previous-artifact
+
+          unzip -q previous-artifact.zip \
+            -d previous-artifact
+
+          echo
+          echo "Conteúdo do artifact:"
+          find previous-artifact -maxdepth 3 -type f -print
+
+          echo
+          echo "Procurando qemu-system-arm..."
+
+          QEMU="$(find previous-artifact \
+            -type f \
+            -name 'qemu-system-arm' \
+            | head -n 1)"
+
+          if [ -z "$QEMU" ]; then
+            echo "ERRO: qemu-system-arm não encontrado no artifact."
+            exit 1
+          fi
+
+          echo
+          echo "QEMU encontrado:"
+          echo "$QEMU"
+
+          cp "$QEMU" package/qemu-system-arm
+
+          chmod +x package/qemu-system-arm
+
+          echo
+          echo "QEMU copiado para:"
+          ls -lh package/qemu-system-arm
+
+      - name: Verificar QEMU
+        run: |
+          echo "=========================================="
+          echo "QEMU COMPILADO"
+          echo "=========================================="
+
+          file package/qemu-system-arm
+
+          echo
+          echo "Versão:"
+          package/qemu-system-arm --version
+
+          echo
+          echo "SHA256:"
+          sha256sum package/qemu-system-arm
+
+      - name: Baixar BootROM
+        run: |
+          echo "Baixando BootROM..."
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o package/bootrom_240_4 \
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/bootrom_240_4
+
+          test -s package/bootrom_240_4
+
+          ls -lh package/bootrom_240_4
+
+      - name: Baixar iBoot
+        run: |
+          echo "Baixando iBoot..."
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o package/iBoot.bin \
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/iBoot.bin
+
+          test -s package/iBoot.bin
+
+          ls -lh package/iBoot.bin
+
+      - name: Baixar NOR
+        run: |
+          echo "Baixando NOR..."
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o package/nor_7E18.bin \
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nor_7E18.bin
+
+          test -s package/nor_7E18.bin
+
+          ls -lh package/nor_7E18.bin
+
+      - name: Baixar NAND
+        run: |
+          echo "Baixando NAND..."
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o nand-canonical.tar.gz \
+            https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nand-canonical.tar.gz
+
+          test -s nand-canonical.tar.gz
+
+          ls -lh nand-canonical.tar.gz
+
+      - name: Extrair NAND
+        run: |
+          echo "=========================================="
+          echo "EXTRAINDO NAND"
+          echo "=========================================="
+
+          tar -xzf nand-canonical.tar.gz \
+            -C package/nand
+
+          echo
+          echo "Arquivos da NAND:"
+
+          find package/nand \
+            -type f \
+            -maxdepth 5 \
+            -print
+
+      - name: Verificar arquivos do iPod
+        run: |
+          echo "=========================================="
+          echo "VERIFICAÇÃO"
+          echo "=========================================="
+
+          test -f package/qemu-system-arm
+          test -s package/bootrom_240_4
+          test -s package/iBoot.bin
+          test -s package/nor_7E18.bin
+
+          echo
+          echo "Arquivos principais:"
+
+          ls -lh \
+            package/qemu-system-arm \
+            package/bootrom_240_4 \
+            package/iBoot.bin \
+            package/nor_7E18.bin
+
+          echo
+          echo "NAND:"
+
+          find package/nand -type f -print
+
+          NAND_COUNT="$(find package/nand -type f | wc -l)"
+
+          echo
+          echo "Quantidade de arquivos NAND: $NAND_COUNT"
+
+          if [ "$NAND_COUNT" -eq 0 ]; then
+            echo "ERRO: NAND vazia."
+            exit 1
+          fi
+
+      - name: Criar pacote único
+        run: |
+          echo "=========================================="
+          echo "CRIANDO TAR.GZ"
+          echo "=========================================="
+
+          tar -czf qemu-ios-ipod-touch-2g.tar.gz \
+            -C package \
+            qemu-system-arm \
+            bootrom_240_4 \
+            iBoot.bin \
+            nor_7E18.bin \
+            nand
+
+          echo
+          echo "Pacote criado:"
+          ls -lh qemu-ios-ipod-touch-2g.tar.gz
+
+          echo
+          echo "Conteúdo:"
+          tar -tzf qemu-ios-ipod-touch-2g.tar.gz
+
+          echo
+          echo "SHA256:"
+          sha256sum qemu-ios-ipod-touch-2g.tar.gz
+
+      - name: Publicar pacote
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ios-ipod-touch-2g-completo
+          path: qemu-ios-ipod-touch-2g.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publicar arquivos separados para diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ios-ipod-touch-2g-diagnostico
+          path: |
+            package/qemu-system-arm
+            package/bootrom_240_4
+            package/iBoot.bin
+            package/nor_7E18.bin
+          if-no-files-found: warn
+          retention-days: 30
