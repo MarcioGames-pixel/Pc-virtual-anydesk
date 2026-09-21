@@ -35,6 +35,7 @@ jobs:
             libslirp0 \
             libssl3 \
             libsdl2-2.0-0 \
+            libsndio7 \
             novnc \
             websockify
 
