@@ -35,6 +35,7 @@ jobs:
             libsdl2-2.0-0 \
             libsndio7.0 \
             qemu-system-common \
+            qemu-system-data \
             novnc \
             websockify
 
