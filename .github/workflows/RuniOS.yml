@@ -1,4 +1,4 @@
-name: Preparar pacote QEMU-iOS iPod touch 2G
+name: QEMU-iOS iPod touch 2G - Black Screen Debug
 
 on:
   workflow_dispatch:
@@ -8,31 +8,47 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
+  debug:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
       - name: Instalar dependências
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             curl \
             ca-certificates \
             unzip \
             tar \
-            gzip
+            gzip \
+            file \
+            procps \
+            net-tools \
+            iproute2 \
+            lsof \
+            psmisc \
+            libglib2.0-0 \
+            libpixman-1-0 \
+            libslirp0 \
+            libssl3 \
+            libsdl2-2.0-0 \
+            novnc \
+            websockify
 
-      - name: Criar estrutura
+      - name: Criar diretórios
         run: |
-          rm -rf package
-          rm -rf previous-artifact.zip
-          mkdir -p package/nand
+          rm -rf qemu-artifact
+          rm -rf ios_files
+          rm -rf diagnostics
 
-      - name: Baixar artifact anterior
+          mkdir -p qemu-artifact
+          mkdir -p ios_files
+          mkdir -p diagnostics
+
+      - name: Baixar artifact 10659859280
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -43,215 +59,531 @@ jobs:
           curl -fL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            -o previous-artifact.zip \
+            -o qemu-artifact.zip \
             "https://api.github.com/repos/MarcioGames-pixel/Pc-virtual-anydesk/actions/artifacts/10659859280/zip"
 
-          test -s previous-artifact.zip
+          test -s qemu-artifact.zip
+
+          unzip -q qemu-artifact.zip \
+            -d qemu-artifact
 
           echo
-          echo "Artifact baixado:"
-          ls -lh previous-artifact.zip
+          echo "Conteúdo:"
+          find qemu-artifact -type f -print
 
-      - name: Extrair QEMU
-        run: |
-          echo "=========================================="
-          echo "EXTRAINDO ARTIFACT"
-          echo "=========================================="
-
-          rm -rf previous-artifact
-          mkdir previous-artifact
-
-          unzip -q previous-artifact.zip \
-            -d previous-artifact
-
-          echo
-          echo "Conteúdo do artifact:"
-          find previous-artifact -maxdepth 3 -type f -print
-
-          echo
-          echo "Procurando qemu-system-arm..."
-
-          QEMU="$(find previous-artifact \
+          QEMU="$(find qemu-artifact \
             -type f \
             -name 'qemu-system-arm' \
             | head -n 1)"
 
           if [ -z "$QEMU" ]; then
-            echo "ERRO: qemu-system-arm não encontrado no artifact."
+            echo "ERRO: qemu-system-arm não encontrado."
+            exit 1
+          fi
+
+          cp "$QEMU" ios_files/qemu-system-arm
+          chmod +x ios_files/qemu-system-arm
+
+          echo
+          echo "QEMU:"
+          ls -lh ios_files/qemu-system-arm
+
+      - name: Verificar bibliotecas
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "DEPENDÊNCIAS"
+          echo "=========================================="
+
+          ldd ./qemu-system-arm | tee ../diagnostics/ldd.txt
+
+          echo
+          echo "Bibliotecas ausentes:"
+
+          if ldd ./qemu-system-arm | grep "not found"; then
+            echo
+            echo "ERRO: existem bibliotecas ausentes."
             exit 1
           fi
 
           echo
-          echo "QEMU encontrado:"
-          echo "$QEMU"
+          echo "Todas as bibliotecas foram encontradas."
 
-          cp "$QEMU" package/qemu-system-arm
-
-          chmod +x package/qemu-system-arm
-
-          echo
-          echo "QEMU copiado para:"
-          ls -lh package/qemu-system-arm
-
-      - name: Verificar QEMU
+      - name: Verificar executável
+        working-directory: ios_files
         run: |
           echo "=========================================="
-          echo "QEMU COMPILADO"
+          echo "QEMU"
           echo "=========================================="
 
-          file package/qemu-system-arm
+          file ./qemu-system-arm \
+            | tee ../diagnostics/qemu-file.txt
+
+          ./qemu-system-arm --version \
+            | tee ../diagnostics/qemu-version.txt
 
           echo
-          echo "Versão:"
-          package/qemu-system-arm --version
+          echo "Máquinas:"
+
+          ./qemu-system-arm -M help \
+            | tee ../diagnostics/machines.txt
 
           echo
-          echo "SHA256:"
-          sha256sum package/qemu-system-arm
+          echo "iPod-Touch:"
+
+          ./qemu-system-arm -M help \
+            | grep -iE 'ipod|touch' \
+            | tee ../diagnostics/ipod-machine.txt
+
+      - name: Verificar suporte de display
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "DISPLAY"
+          echo "=========================================="
+
+          ./qemu-system-arm -display help \
+            | tee ../diagnostics/display-help.txt || true
+
+          echo
+          echo "=========================================="
+          echo "VNC"
+          echo "=========================================="
+
+          ./qemu-system-arm -vnc help \
+            | tee ../diagnostics/vnc-help.txt || true
 
       - name: Baixar BootROM
+        working-directory: ios_files
         run: |
-          echo "Baixando BootROM..."
-
           curl -fL --retry 5 --retry-delay 3 \
-            -o package/bootrom_240_4 \
+            -o bootrom_240_4 \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/bootrom_240_4
 
-          test -s package/bootrom_240_4
+          test -s bootrom_240_4
 
-          ls -lh package/bootrom_240_4
+          ls -lh bootrom_240_4
 
       - name: Baixar iBoot
+        working-directory: ios_files
         run: |
-          echo "Baixando iBoot..."
-
           curl -fL --retry 5 --retry-delay 3 \
-            -o package/iBoot.bin \
+            -o iBoot.bin \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/iBoot.bin
 
-          test -s package/iBoot.bin
+          test -s iBoot.bin
 
-          ls -lh package/iBoot.bin
+          ls -lh iBoot.bin
 
       - name: Baixar NOR
+        working-directory: ios_files
         run: |
-          echo "Baixando NOR..."
-
           curl -fL --retry 5 --retry-delay 3 \
-            -o package/nor_7E18.bin \
+            -o nor_7E18.bin \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nor_7E18.bin
 
-          test -s package/nor_7E18.bin
+          test -s nor_7E18.bin
 
-          ls -lh package/nor_7E18.bin
+          ls -lh nor_7E18.bin
 
       - name: Baixar NAND
+        working-directory: ios_files
         run: |
-          echo "Baixando NAND..."
-
           curl -fL --retry 5 --retry-delay 3 \
             -o nand-canonical.tar.gz \
             https://github.com/samhenrigold/qemu-ios/releases/download/ipod-touch-2g-2026.08/nand-canonical.tar.gz
 
           test -s nand-canonical.tar.gz
 
-          ls -lh nand-canonical.tar.gz
-
-      - name: Extrair NAND
-        run: |
-          echo "=========================================="
-          echo "EXTRAINDO NAND"
-          echo "=========================================="
+          rm -rf nand
+          mkdir -p nand
 
           tar -xzf nand-canonical.tar.gz \
-            -C package/nand
+            -C nand
 
-          echo
-          echo "Arquivos da NAND:"
+          echo "=========================================="
+          echo "NAND"
+          echo "=========================================="
 
-          find package/nand \
-            -type f \
-            -maxdepth 5 \
-            -print
+          find nand -type f \
+            | tee ../diagnostics/nand-files.txt
 
       - name: Verificar arquivos do iPod
+        working-directory: ios_files
         run: |
           echo "=========================================="
-          echo "VERIFICAÇÃO"
+          echo "FIRMWARE / NAND"
           echo "=========================================="
 
-          test -f package/qemu-system-arm
-          test -s package/bootrom_240_4
-          test -s package/iBoot.bin
-          test -s package/nor_7E18.bin
+          test -s bootrom_240_4
+          test -s iBoot.bin
+          test -s nor_7E18.bin
 
-          echo
-          echo "Arquivos principais:"
+          NAND_COUNT="$(find nand -type f | wc -l)"
 
-          ls -lh \
-            package/qemu-system-arm \
-            package/bootrom_240_4 \
-            package/iBoot.bin \
-            package/nor_7E18.bin
-
-          echo
-          echo "NAND:"
-
-          find package/nand -type f -print
-
-          NAND_COUNT="$(find package/nand -type f | wc -l)"
-
-          echo
-          echo "Quantidade de arquivos NAND: $NAND_COUNT"
+          echo "Arquivos NAND: $NAND_COUNT"
 
           if [ "$NAND_COUNT" -eq 0 ]; then
             echo "ERRO: NAND vazia."
             exit 1
           fi
 
-      - name: Criar pacote único
-        run: |
-          echo "=========================================="
-          echo "CRIANDO TAR.GZ"
-          echo "=========================================="
-
-          tar -czf qemu-ios-ipod-touch-2g.tar.gz \
-            -C package \
-            qemu-system-arm \
+          ls -lh \
             bootrom_240_4 \
             iBoot.bin \
-            nor_7E18.bin \
-            nand
+            nor_7E18.bin
+
+      - name: Iniciar QEMU com VNC
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "INICIANDO QEMU"
+          echo "=========================================="
+
+          rm -f qemu.log
+          rm -f qemu.pid
+
+          ./qemu-system-arm \
+            -M iPod-Touch,bootrom=bootrom_240_4,nand=nand,nor=nor_7E18.bin \
+            -serial mon:stdio \
+            -cpu max \
+            -m 2G \
+            -d unimp,guest_errors \
+            -vnc :0 \
+            > qemu.log 2>&1 &
+
+          echo $! > qemu.pid
+
+          echo "PID:"
+          cat qemu.pid
+
+          sleep 15
+
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "QEMU encerrou."
+
+            cat qemu.log
+
+            exit 1
+          fi
+
+          echo "QEMU ainda está executando."
+
+      - name: Capturar diagnóstico inicial
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "DIAGNÓSTICO INICIAL"
+          echo "=========================================="
+
+          ps -p "$(cat qemu.pid)" \
+            -o pid,ppid,stat,etime,%cpu,%mem,cmd \
+            | tee ../diagnostics/qemu-process-initial.txt
 
           echo
-          echo "Pacote criado:"
-          ls -lh qemu-ios-ipod-touch-2g.tar.gz
+          echo "PORTAS:"
+          ss -lntp \
+            | tee ../diagnostics/ports-initial.txt
 
           echo
-          echo "Conteúdo:"
-          tar -tzf qemu-ios-ipod-touch-2g.tar.gz
+          echo "LOG QEMU:"
+          tail -200 qemu.log \
+            | tee ../diagnostics/qemu-initial.log
+
+      - name: Aguardar framebuffer VNC
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "VNC / FRAMEBUFFER"
+          echo "=========================================="
+
+          FOUND=0
+
+          for i in $(seq 1 60); do
+
+            if ss -lnt | grep -q ':5900'; then
+              echo "VNC detectado na porta 5900."
+              FOUND=1
+              break
+            fi
+
+            echo "Aguardando VNC: $i/60"
+            sleep 2
+          done
+
+          if [ "$FOUND" -ne 1 ]; then
+            echo "VNC não abriu."
+
+            echo
+            echo "PORTAS:"
+            ss -lnt
+
+            echo
+            echo "LOG:"
+            cat qemu.log
+
+            exit 1
+          fi
+
+          ss -lntp \
+            | tee ../diagnostics/vnc-listen.txt
+
+      - name: Testar conexão VNC
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "TESTE TCP VNC"
+          echo "=========================================="
+
+          if timeout 5 bash -c \
+            '</dev/tcp/127.0.0.1/5900'; then
+
+            echo "TCP 5900 respondeu."
+
+          else
+
+            echo "ERRO: TCP 5900 não respondeu."
+            exit 1
+
+          fi
+
+      - name: Iniciar noVNC
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "NOVNC"
+          echo "=========================================="
+
+          rm -f novnc.log
+          rm -f novnc.pid
+
+          websockify \
+            --web=/usr/share/novnc \
+            6080 \
+            127.0.0.1:5900 \
+            > novnc.log 2>&1 &
+
+          echo $! > novnc.pid
+
+          sleep 5
+
+          if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+            echo "noVNC encerrou."
+
+            cat novnc.log
+
+            exit 1
+          fi
+
+          curl -f \
+            http://127.0.0.1:6080/vnc.html \
+            -o ../diagnostics/vnc.html
+
+          echo "noVNC funcionando."
+
+      - name: Instalar Bore
+        run: |
+          curl -fL --retry 5 --retry-delay 3 \
+            -o bore.tar.gz \
+            https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
+
+          tar -xzf bore.tar.gz
+
+          chmod +x bore
+
+          sudo mv bore /usr/local/bin/bore
+
+          bore --version
+
+      - name: Expor noVNC
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "BORE"
+          echo "=========================================="
+
+          rm -f bore.log
+          rm -f bore.pid
+
+          bore local 6080 \
+            --to bore.pub \
+            --port 6080 \
+            > bore.log 2>&1 &
+
+          echo $! > bore.pid
+
+          sleep 10
+
+          if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+            echo "Bore encerrou."
+
+            cat bore.log
+
+            exit 1
+          fi
+
+          cat bore.log
 
           echo
-          echo "SHA256:"
-          sha256sum qemu-ios-ipod-touch-2g.tar.gz
+          echo "=========================================="
+          echo "URL"
+          echo "=========================================="
 
-      - name: Publicar pacote
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-ios-ipod-touch-2g-completo
-          path: qemu-ios-ipod-touch-2g.tar.gz
-          if-no-files-found: error
-          retention-days: 30
+          echo "http://bore.pub:6080/vnc.html?autoconnect=true"
 
-      - name: Publicar arquivos separados para diagnóstico
+      - name: Analisar logs de LCD e framebuffer
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "ANÁLISE LCD / FRAMEBUFFER / DISPLAY"
+          echo "=========================================="
+
+          grep -Ein \
+            'lcd|framebuffer|frame buffer|display|surface|scanout|fb0|fb1|pixel|layer|iosurface|mipi|dsi|panel|backlight|brightness|vsync|vblank|gpu|opengl|egl|render|blit|flush' \
+            qemu.log \
+            | tee ../diagnostics/display-matches.txt \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "BOOT / KERNEL"
+          echo "=========================================="
+
+          grep -Ein \
+            'bootrom|iboot|kernel|kernelcache|darwin|xnu|launchd|SpringBoard|panic|paniclog|exception|abort|fatal|reset|watchdog|shutdown|power' \
+            qemu.log \
+            | tee ../diagnostics/boot-matches.txt \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "ERROS"
+          echo "=========================================="
+
+          grep -Ein \
+            'error|failed|failure|unimplemented|unsupported|invalid|abort|segfault|SIGSEGV' \
+            qemu.log \
+            | tee ../diagnostics/error-matches.txt \
+            || true
+
+      - name: Capturar estado final
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "ESTADO FINAL"
+          echo "=========================================="
+
+          echo
+          echo "PROCESSO QEMU:"
+          ps -p "$(cat qemu.pid)" \
+            -o pid,ppid,stat,etime,%cpu,%mem,cmd \
+            | tee ../diagnostics/qemu-process-final.txt \
+            || true
+
+          echo
+          echo "PORTAS:"
+          ss -lntp \
+            | tee ../diagnostics/ports-final.txt \
+            || true
+
+          echo
+          echo "LOG FINAL:"
+          tail -500 qemu.log \
+            | tee ../diagnostics/qemu-final.log
+
+          echo
+          echo "NOVNC:"
+          cat novnc.log \
+            | tee ../diagnostics/novnc.log \
+            || true
+
+          echo
+          echo "BORE:"
+          cat bore.log \
+            | tee ../diagnostics/bore.log \
+            || true
+
+      - name: Publicar diagnóstico
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-ios-ipod-touch-2g-diagnostico
+          name: ipod-touch-2g-black-screen-diagnostics
           path: |
-            package/qemu-system-arm
-            package/bootrom_240_4
-            package/iBoot.bin
-            package/nor_7E18.bin
+            diagnostics/
+            ios_files/qemu.log
+            ios_files/novnc.log
+            ios_files/bore.log
+            ios_files/qemu-system-arm
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 14
+
+      - name: Manter VM e display ativos
+        working-directory: ios_files
+        run: |
+          echo "=========================================="
+          echo "IPOD TOUCH 2G ONLINE"
+          echo "=========================================="
+
+          echo
+          echo "noVNC:"
+          echo "http://bore.pub:6080/vnc.html?autoconnect=true"
+
+          echo
+          echo "QEMU PID:"
+          cat qemu.pid
+
+          echo
+          echo "VNC: 5900"
+          echo "noVNC: 6080"
+
+          echo
+          echo "=========================================="
+          echo "MONITORANDO DISPLAY"
+          echo "=========================================="
+
+          while true; do
+
+            if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+              echo
+              echo "QEMU PAROU."
+
+              echo
+              echo "ÚLTIMO LOG:"
+              tail -500 qemu.log
+
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+              echo
+              echo "NOVNC PAROU."
+
+              cat novnc.log
+
+              exit 1
+            fi
+
+            if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+              echo
+              echo "BORE PAROU."
+
+              cat bore.log
+
+              exit 1
+            fi
+
+            echo
+            echo "$(date '+%H:%M:%S') - QEMU ativo"
+
+            ps -p "$(cat qemu.pid)" \
+              -o pid,stat,etime,%cpu,%mem \
+              || true
+
+            echo "VNC:"
+            ss -lnt | grep ':5900' || true
+
+            echo "noVNC:"
+            ss -lnt | grep ':6080' || true
+
+            sleep 15
+          done
