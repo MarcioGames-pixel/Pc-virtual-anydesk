@@ -31,9 +31,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          IPSW_URL="https://updates.cdn-apple.com/2010fall/services-whats-new/iPod2,1_4.2.1_8C148_Restore.ipsw"
-          IPSW="iPod2,1_4.2.1_8C148_Restore.ipsw"
+          IPSW_URL="https://ipsw.me/download/iPod2,1/8C14"
 
+          
           curl -L --fail --retry 5 --retry-all-errors \
             "$IPSW_URL" \
             -o "$IPSW"
