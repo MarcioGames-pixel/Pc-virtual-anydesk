@@ -27,7 +27,6 @@ jobs:
           brew install blacktop/tap/ipsw
 
           ipsw help >/dev/null
-          echo "ipsw installed"
 
       - name: Download qemu-ios-tools
         shell: bash
@@ -50,7 +49,6 @@ jobs:
 
           echo "IMGTOOLS_DIR=$PWD/qemu-ios-tools/imgtools" >> "$GITHUB_ENV"
 
-          echo "imgtools:"
           ls -lh qemu-ios-tools/imgtools
 
       - name: Download iOS 4.2.1 IPSW
@@ -70,7 +68,6 @@ jobs:
 
           if [[ -z "$IPSW" ]]; then
             echo "ERROR: IPSW was not downloaded"
-            find ipsw -maxdepth 2 -type f -print
             exit 1
           fi
 
@@ -88,14 +85,6 @@ jobs:
           fi
 
           ls -lh "$IPSW"
-
-      - name: Inspect IPSW
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          unzip -l "$IPSW" | grep -E \
-            '038-0014-002\.dmg|kernelcache\.release\.n72|BuildManifest\.plist'
 
       - name: Extract IPSW files
         shell: bash
@@ -197,58 +186,90 @@ jobs:
             mv template-extract/nand nand-template
           else
             echo "ERROR: archive does not contain nand/"
-            find template-extract -maxdepth 3 -type d -print
             exit 1
           fi
 
           for cs in 0 1 2 3; do
-            if [[ ! -d "nand-template/cs${cs}" ]]; then
-              echo "ERROR: missing cs${cs}"
-              exit 1
-            fi
+            test -d "nand-template/cs${cs}"
           done
 
           echo
           echo "NAND template:"
           du -sh nand-template
 
-          for cs in 0 1 2 3; do
-            COUNT="$(find "nand-template/cs${cs}" -type f -name '*.page' | wc -l | tr -d ' ')"
-            echo "cs${cs}: ${COUNT} pages"
-          done
+          python3 <<'PY'
+          import os
+
+          base = "nand-template"
+
+          for cs in range(4):
+              directory = os.path.join(base, f"cs{cs}")
+              count = 0
+
+              for name in os.listdir(directory):
+                  if name.endswith(".page"):
+                      count += 1
+
+              print(f"cs{cs}: {count} pages")
+          PY
 
       - name: Validate NAND template
         shell: bash
         run: |
           set -euo pipefail
 
-          EXPECTED_PAGE_SIZE=4160
+          python3 <<'PY'
+          import os
+          import sys
 
-          for cs in 0 1 2 3; do
-            DIR="nand-template/cs${cs}"
+          base = "nand-template"
+          expected_size = 4160
 
-            COUNT="$(find "$DIR" -type f -name '*.page' | wc -l | tr -d ' ')"
+          for cs in range(4):
+              directory = os.path.join(base, f"cs{cs}")
 
-            if [[ "$COUNT" -eq 0 ]]; then
-              echo "ERROR: cs${cs} contains no pages"
-              exit 1
-            fi
+              if not os.path.isdir(directory):
+                  print(f"ERROR: missing {directory}")
+                  sys.exit(1)
 
-            echo "Checking cs${cs}: ${COUNT} pages"
+              sample = None
+              count = 0
 
-            SAMPLE="$(find "$DIR" -type f -name '*.page' | head -n 1)"
+              for name in os.listdir(directory):
+                  if not name.endswith(".page"):
+                      continue
 
-            SIZE="$(stat -f '%z' "$SAMPLE")"
+                  path = os.path.join(directory, name)
 
-            if [[ "$SIZE" -ne "$EXPECTED_PAGE_SIZE" ]]; then
-              echo "ERROR: $SAMPLE has size $SIZE"
-              echo "Expected $EXPECTED_PAGE_SIZE bytes"
-              exit 1
-            fi
-          done
+                  if not os.path.isfile(path):
+                      continue
 
-          echo
-          echo "NAND template validation OK."
+                  count += 1
+
+                  if sample is None:
+                      sample = path
+
+              print(f"Checking cs{cs}: {count} pages")
+
+              if count == 0:
+                  print(f"ERROR: cs{cs} contains no pages")
+                  sys.exit(1)
+
+              size = os.path.getsize(sample)
+
+              print(f"Sample: {sample}")
+              print(f"Size: {size} bytes")
+
+              if size != expected_size:
+                  print(
+                      f"ERROR: {sample} has size {size}, "
+                      f"expected {expected_size}"
+                  )
+                  sys.exit(1)
+
+          print()
+          print("NAND template validation OK.")
+          PY
 
       - name: Build NAND from IPSW
         shell: bash
@@ -284,41 +305,68 @@ jobs:
         run: |
           set -euo pipefail
 
-          TOTAL=0
+          python3 <<'PY'
+          import os
+          import sys
 
-          for cs in 0 1 2 3; do
-            COUNT="$(find "output-nand/cs${cs}" -type f -name '*.page' | wc -l | tr -d ' ')"
+          base = "output-nand"
+          expected_size = 4160
+          total = 0
 
-            if [[ "$COUNT" -eq 0 ]]; then
-              echo "ERROR: output cs${cs} has no pages"
-              exit 1
-            fi
+          for cs in range(4):
+              directory = os.path.join(base, f"cs{cs}")
 
-            echo "output cs${cs}: ${COUNT} pages"
+              if not os.path.isdir(directory):
+                  print(f"ERROR: missing {directory}")
+                  sys.exit(1)
 
-            TOTAL=$((TOTAL + COUNT))
-          done
+              count = 0
+              sample = None
 
-          echo
-          echo "Total NAND pages: $TOTAL"
+              for name in os.listdir(directory):
+                  if not name.endswith(".page"):
+                      continue
 
-          if [[ "$TOTAL" -le 0 ]]; then
-            echo "ERROR: generated NAND is empty"
-            exit 1
-          fi
+                  path = os.path.join(directory, name)
 
-          SAMPLE="$(find output-nand -type f -name '*.page' | head -n 1)"
-          SIZE="$(stat -f '%z' "$SAMPLE")"
+                  if not os.path.isfile(path):
+                      continue
 
-          echo "Sample page size: $SIZE bytes"
+                  count += 1
 
-          if [[ "$SIZE" -ne 4160 ]]; then
-            echo "ERROR: generated NAND page is not 4160 bytes"
-            exit 1
-          fi
+                  if sample is None:
+                      sample = path
 
-          echo
-          echo "Generated NAND validation OK."
+              print(f"output cs{cs}: {count} pages")
+
+              if count == 0:
+                  print(f"ERROR: output cs{cs} has no pages")
+                  sys.exit(1)
+
+              total += count
+
+          print()
+          print(f"Total NAND pages: {total}")
+
+          if total == 0:
+              print("ERROR: generated NAND is empty")
+              sys.exit(1)
+
+          size = os.path.getsize(sample)
+
+          print(f"Sample page: {sample}")
+          print(f"Sample page size: {size} bytes")
+
+          if size != expected_size:
+              print(
+                  f"ERROR: generated NAND page is not "
+                  f"{expected_size} bytes"
+              )
+              sys.exit(1)
+
+          print()
+          print("Generated NAND validation OK.")
+          PY
 
       - name: Pack NAND
         shell: bash
