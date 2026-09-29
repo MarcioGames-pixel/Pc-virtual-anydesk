@@ -21,6 +21,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           brew tap blacktop/tap
           brew trust blacktop/tap
           brew install blacktop/tap/ipsw
@@ -86,20 +87,60 @@ jobs:
       - name: Prepare imgtools
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          test -f imgtools/build_nand.py
-          test -f imgtools/hfsvol.py
-          test -f imgtools/nandblob.py
-          test -f imgtools/ftlmap.py
-          test -f imgtools/pack_nand.py
+          echo "Python:"
+          python3 --version
 
-          python3 -m py_compile \
+          echo
+          echo "Checking files..."
+
+          for f in \
             imgtools/build_nand.py \
             imgtools/hfsvol.py \
             imgtools/nandblob.py \
             imgtools/ftlmap.py \
             imgtools/pack_nand.py
+          do
+            if [[ ! -f "$f" ]]; then
+              echo "MISSING: $f"
+              exit 1
+            fi
+
+            echo "OK: $f"
+          done
+
+          echo
+          echo "Compiling files..."
+
+          FAILED=0
+
+          for f in \
+            imgtools/build_nand.py \
+            imgtools/hfsvol.py \
+            imgtools/nandblob.py \
+            imgtools/ftlmap.py \
+            imgtools/pack_nand.py
+          do
+            echo
+            echo "===== $f ====="
+
+            if python3 -m py_compile "$f"; then
+              echo "COMPILE OK: $f"
+            else
+              echo "COMPILE FAILED: $f"
+              FAILED=1
+            fi
+          done
+
+          echo
+
+          if [[ "$FAILED" -ne 0 ]]; then
+            echo "At least one imgtool failed to compile."
+            exit 1
+          fi
+
+          echo "All imgtools compiled successfully."
 
       - name: Download NAND template
         shell: bash
