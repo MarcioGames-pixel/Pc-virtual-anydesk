@@ -21,6 +21,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          brew tap blacktop/tap
+          brew trust blacktop/tap
           brew install blacktop/tap/ipsw
           ipsw --version
 
