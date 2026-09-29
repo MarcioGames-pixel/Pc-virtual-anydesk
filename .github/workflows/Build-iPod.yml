@@ -17,50 +17,70 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check macOS tools
+      - name: Install ipsw
         shell: bash
         run: |
           set -euo pipefail
-          sw_vers
-          python3 --version
-          hdiutil help >/dev/null
-          command -v fsck_hfs
+          brew install blacktop/tap/ipsw
+          ipsw --version
 
       - name: Download iOS 4.2.1 IPSW
         shell: bash
         run: |
           set -euo pipefail
 
-          IPSW_URL="https://ipsw.me/download/iPod2,1/8C14"
+          mkdir -p ipsw
 
-          
-          curl -L --fail --retry 5 --retry-all-errors \
-            "$IPSW_URL" \
-            -o "$IPSW"
+          ipsw download ipsw \
+            --device iPod2,1 \
+            --build 8C148 \
+            --output ipsw \
+            --confirm
+
+          IPSW="$(find ipsw -maxdepth 1 -type f -name '*.ipsw' | head -n 1)"
+
+          if [[ -z "$IPSW" ]]; then
+            echo "ERROR: IPSW was not downloaded"
+            find ipsw -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+          echo "IPSW=$IPSW" >> "$GITHUB_ENV"
 
           EXPECTED="d1b96e80504d817b5398822e2027b1c896227e1de3674d08a100330ea5a5a8d4"
           ACTUAL="$(shasum -a 256 "$IPSW" | awk '{print $1}')"
+
+          echo "Expected SHA256: $EXPECTED"
+          echo "Actual SHA256:   $ACTUAL"
 
           if [[ "$ACTUAL" != "$EXPECTED" ]]; then
             echo "ERROR: IPSW SHA256 mismatch"
             exit 1
           fi
 
+          ls -lh "$IPSW"
+
       - name: Extract IPSW files
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p ipsw
+          mkdir -p extracted
 
           unzip -j \
-            iPod2,1_4.2.1_8C148_Restore.ipsw \
+            "$IPSW" \
             "038-0014-002.dmg" \
             "kernelcache.release.n72" \
-            -d ipsw
+            -d extracted
 
-          test -f ipsw/038-0014-002.dmg
-          test -f ipsw/kernelcache.release.n72
+          test -f extracted/038-0014-002.dmg
+          test -f extracted/kernelcache.release.n72
+
+          echo "RootFS:"
+          ls -lh extracted/038-0014-002.dmg
+
+          echo "Kernelcache:"
+          ls -lh extracted/kernelcache.release.n72
 
       - name: Prepare imgtools
         shell: bash
@@ -88,9 +108,12 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${NAND_TEMPLATE_URL:-}" ]]; then
-            echo "NAND_TEMPLATE_URL secret is not configured."
+            echo "ERROR: NAND_TEMPLATE_URL secret is not configured."
             exit 1
           fi
+
+          rm -rf template-extract nand-template
+          mkdir -p template-extract
 
           curl -L --fail --retry 5 --retry-all-errors \
             "$NAND_TEMPLATE_URL" \
@@ -102,6 +125,7 @@ jobs:
             mv template-extract/nand nand-template
           else
             echo "ERROR: archive does not contain nand/"
+            find template-extract -maxdepth 3 -type d -print
             exit 1
           fi
 
@@ -148,14 +172,14 @@ jobs:
 
               total += len(files)
 
-              for name in files[:1]:
-                  sample = os.path.join(path, name)
+              sample = os.path.join(path, files[0])
 
-                  if os.path.getsize(sample) != 4160:
-                      print(
-                          f"ERROR: {sample} is not 4160 bytes"
-                      )
-                      sys.exit(1)
+              if os.path.getsize(sample) != 4160:
+                  print(
+                      f"ERROR: {sample}: "
+                      f"{os.path.getsize(sample)} bytes, expected 4160"
+                  )
+                  sys.exit(1)
 
           print(f"total: {total} pages")
           print("template validation OK")
@@ -171,8 +195,8 @@ jobs:
           rm -rf output-nand work-nand
 
           python3 imgtools/build_nand.py \
-            --rootfs "ipsw/038-0014-002.dmg" \
-            --kernelcache "ipsw/kernelcache.release.n72" \
+            --rootfs "extracted/038-0014-002.dmg" \
+            --kernelcache "extracted/kernelcache.release.n72" \
             --template "$PWD/nand-template" \
             --out "$PWD/output-nand" \
             --blocks "$BLOCKS" \
@@ -202,6 +226,35 @@ jobs:
             fi
           done
 
+          python3 - <<'PY'
+          import os
+          import sys
+
+          checked = 0
+
+          for cs in range(4):
+              path = f"output-nand/cs{cs}"
+
+              for name in os.listdir(path):
+                  if not name.endswith(".page"):
+                      continue
+
+                  full = os.path.join(path, name)
+                  size = os.path.getsize(full)
+
+                  if size != 4160:
+                      print(
+                          f"ERROR: {full}: "
+                          f"{size} bytes, expected 4160"
+                      )
+                      sys.exit(1)
+
+                  checked += 1
+
+          print(f"Checked {checked} NAND pages.")
+          print("Generated NAND validation OK")
+          PY
+
       - name: Pack NAND
         shell: bash
         run: |
@@ -210,6 +263,8 @@ jobs:
           python3 imgtools/pack_nand.py \
             output-nand \
             nand_n72ap_4.2.1_8C148.itnand
+
+          test -f nand_n72ap_4.2.1_8C148.itnand
 
           ls -lh nand_n72ap_4.2.1_8C148.itnand
 
@@ -224,6 +279,8 @@ jobs:
             cd output-nand
             zip -qr ../nand_n72ap_4.2.1_8C148.zip .
           )
+
+          test -f nand_n72ap_4.2.1_8C148.zip
 
           ls -lh nand_n72ap_4.2.1_8C148.zip
 
