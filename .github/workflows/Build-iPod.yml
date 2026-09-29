@@ -1,0 +1,589 @@
+name: Build iPod touch 2G NAND - iOS 4.2.1
+
+on:
+workflow_dispatch:
+inputs:
+blocks:name: Build iPod touch 2G NAND - iOS 4.2.1
+
+on:
+workflow_dispatch:
+inputs:
+blocks:
+description: "HFS allocation blocks"
+required: true
+default: "128000"
+type: string
+
+jobs:
+build-nand:
+runs-on: macos-latest
+
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  - name: Check macOS tools
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "macOS:"
+      sw_vers
+
+      echo
+      echo "Python:"
+      python3 --version
+
+      echo
+      echo "hdiutil:"
+      hdiutil help >/dev/null
+
+      echo
+      echo "fsck_hfs:"
+      command -v fsck_hfs
+
+  - name: Download iOS 4.2.1 IPSW
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      IPSW_URL="https://updates.cdn-apple.com/2010fall/services-whats-new/iPod2,1_4.2.1_8C148_Restore.ipsw"
+      IPSW="iPod2,1_4.2.1_8C148_Restore.ipsw"
+
+      curl -L --fail --retry 5 --retry-all-errors \
+        "$IPSW_URL" \
+        -o "$IPSW"
+
+      echo "Downloaded:"
+      ls -lh "$IPSW"
+
+      echo "SHA256:"
+      shasum -a 256 "$IPSW"
+
+      EXPECTED="d1b96e80504d817b5398822e2027b1c896227e1de3674d08a100330ea5a5a8d4"
+      ACTUAL="$(shasum -a 256 "$IPSW" | awk '{print $1}')"
+
+      if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+        echo "ERROR: IPSW SHA256 mismatch"
+        echo "Expected: $EXPECTED"
+        echo "Actual:   $ACTUAL"
+        exit 1
+      fi
+
+  - name: Extract IPSW files
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      mkdir -p ipsw
+
+      unzip -j \
+        iPod2,1_4.2.1_8C148_Restore.ipsw \
+        "038-0014-002.dmg" \
+        "kernelcache.release.n72" \
+        -d ipsw
+
+      echo "Extracted files:"
+      ls -lh ipsw
+
+      test -f ipsw/038-0014-002.dmg
+      test -f ipsw/kernelcache.release.n72
+
+  - name: Prepare imgtools
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      test -f imgtools/build_nand.py
+      test -f imgtools/hfsvol.py
+      test -f imgtools/nandblob.py
+      test -f imgtools/ftlmap.py
+
+      python3 -m py_compile \
+        imgtools/build_nand.py \
+        imgtools/hfsvol.py \
+        imgtools/nandblob.py \
+        imgtools/ftlmap.py
+
+  - name: Download NAND template
+    shell: bash
+    env:
+      NAND_TEMPLATE_URL: ${{ secrets.NAND_TEMPLATE_URL }}
+    run: |
+      set -euo pipefail
+
+      if [[ -z "${NAND_TEMPLATE_URL:-}" ]]; then
+        echo "NAND_TEMPLATE_URL secret is not configured."
+        echo
+        echo "This workflow requires the 4.2.1-compatible nand_n72ap.zip"
+        echo "or an equivalent page-directory archive."
+        exit 1
+      fi
+
+      curl -L --fail --retry 5 --retry-all-errors \
+        "$NAND_TEMPLATE_URL" \
+        -o nand_n72ap.zip
+
+      unzip -q nand_n72ap.zip -d template-extract
+
+      if [[ -d template-extract/nand ]]; then
+        mv template-extract/nand nand-template
+      else
+        echo "ERROR: archive does not contain a top-level nand/ directory"
+        find template-extract -maxdepth 2 -type d -print
+        exit 1
+      fi
+
+      for cs in 0 1 2 3; do
+        test -d "nand-template/cs${cs}"
+      done
+
+      echo "Template:"
+      for cs in 0 1 2 3; do
+        count="$(find "nand-template/cs${cs}" -maxdepth 1 -type f -name '*.page' | wc -l | tr -d ' ')"
+        echo "cs${cs}: ${count} pages"
+      done
+
+  - name: Validate NAND template
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 - <<'PY'
+      import os
+      import sys
+
+      root = "nand-template"
+
+      expected = {
+          "cs0": 32017,
+          "cs1": 32014,
+          "cs2": 32014,
+          "cs3": 32015,
+      }
+
+      total = 0
+
+      for cs, wanted in expected.items():
+          path = os.path.join(root, cs)
+          files = [
+              x for x in os.listdir(path)
+              if x.endswith(".page") and x[:-5].isdigit()
+          ]
+
+          print(f"{cs}: {len(files)} pages")
+
+          if len(files) != wanted:
+              print(
+                  f"ERROR: expected {wanted} pages in {cs}, "
+                  f"got {len(files)}"
+              )
+              sys.exit(1)
+
+          total += len(files)
+
+          sample = os.path.join(path, files[0])
+          size = os.path.getsize(sample)
+
+          if size != 4160:
+              print(
+                  f"ERROR: {sample} is {size} bytes, "
+                  "expected 4160"
+              )
+              sys.exit(1)
+
+      print(f"total: {total} pages")
+      print("template validation OK")
+      PY
+
+  - name: Build NAND
+    shell: bash
+    env:
+      BLOCKS: ${{ inputs.blocks }}
+    run: |
+      set -euo pipefail
+
+      rm -rf output-nand work-nand
+      mkdir -p output-nand
+
+      python3 imgtools/build_nand.py \
+        --rootfs "ipsw/038-0014-002.dmg" \
+        --kernelcache "ipsw/kernelcache.release.n72" \
+        --template "$PWD/nand-template" \
+        --out "$PWD/output-nand" \
+        --blocks "$BLOCKS" \
+        --workdir "$PWD/work-nand" \
+        --keep-work
+
+  - name: Validate generated NAND
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      for cs in 0 1 2 3; do
+        test -d "output-nand/cs${cs}"
+
+        count="$(find "output-nand/cs${cs}" \
+          -maxdepth 1 \
+          -type f \
+          -name '*.page' \
+          | wc -l \
+          | tr -d ' ')"
+
+        echo "output cs${cs}: ${count} pages"
+
+        if [[ "$count" -eq 0 ]]; then
+          echo "ERROR: cs${cs} is empty"
+          exit 1
+        fi
+      done
+
+      echo
+      echo "Sample page sizes:"
+      find output-nand \
+        -type f \
+        -name '*.page' \
+        -print0 |
+        xargs -0 -n1 stat -f '%N %z' |
+        head -20
+
+  - name: Pack NAND
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 imgtools/pack_nand.py \
+        output-nand \
+        nand_n72ap_4.2.1_8C148.itnand
+
+      ls -lh nand_n72ap_4.2.1_8C148.itnand
+
+  - name: Create ZIP
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      cd output-nand
+      zip -qr ../nand_n72ap_4.2.1_8C148.zip nand-placeholder 2>/dev/null || true
+      cd ..
+
+      rm -f nand_n72ap_4.2.1_8C148.zip
+
+      zip -qr \
+        nand_n72ap_4.2.1_8C148.zip \
+        output-nand
+
+      ls -lh nand_n72ap_4.2.1_8C148.zip
+
+  - name: Upload NAND page directory
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-pages
+      path: output-nand/
+      if-no-files-found: error
+      retention-days: 7
+
+  - name: Upload packed NAND
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-packed
+      path: nand_n72ap_4.2.1_8C148.itnand
+      if-no-files-found: error
+      retention-days: 7
+
+  - name: Upload ZIP
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-zip
+      path: nand_n72ap_4.2.1_8C148.zip
+      if-no-files-found: error
+      retention-days: 7
+description: "HFS allocation blocks"
+required: true
+  default: "12800
+  type: string
+
+ jobs:
+ build-nand:
+ runs-on: macos-latest
+
+ steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  - name: Check macOS tools
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "macOS:"
+      sw_vers
+
+      echo
+      echo "Python:"
+      python3 --version
+
+      echo
+      echo "hdiutil:"
+      hdiutil help >/dev/null
+
+      echo
+      echo "fsck_hfs:"
+      command -v fsck_hfs
+
+  - name: Download iOS 4.2.1 IPSW
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      IPSW_URL="https://updates.cdn-apple.com/2010fall/services-whats-new/iPod2,1_4.2.1_8C148_Restore.ipsw"
+      IPSW="iPod2,1_4.2.1_8C148_Restore.ipsw"
+
+      curl -L --fail --retry 5 --retry-all-errors \
+        "$IPSW_URL" \
+        -o "$IPSW"
+
+      echo "Downloaded:"
+      ls -lh "$IPSW"
+
+      echo "SHA256:"
+      shasum -a 256 "$IPSW"
+
+      EXPECTED="d1b96e80504d817b5398822e2027b1c896227e1de3674d08a100330ea5a5a8d4"
+      ACTUAL="$(shasum -a 256 "$IPSW" | awk '{print $1}')"
+
+      if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+        echo "ERROR: IPSW SHA256 mismatch"
+        echo "Expected: $EXPECTED"
+        echo "Actual:   $ACTUAL"
+        exit 1
+      fi
+
+  - name: Extract IPSW files
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      mkdir -p ipsw
+
+      unzip -j \
+        iPod2,1_4.2.1_8C148_Restore.ipsw \
+        "038-0014-002.dmg" \
+        "kernelcache.release.n72" \
+        -d ipsw
+
+      echo "Extracted files:"
+      ls -lh ipsw
+
+      test -f ipsw/038-0014-002.dmg
+      test -f ipsw/kernelcache.release.n72
+
+  - name: Prepare imgtools
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      test -f imgtools/build_nand.py
+      test -f imgtools/hfsvol.py
+      test -f imgtools/nandblob.py
+      test -f imgtools/ftlmap.py
+
+      python3 -m py_compile \
+        imgtools/build_nand.py \
+        imgtools/hfsvol.py \
+        imgtools/nandblob.py \
+        imgtools/ftlmap.py
+
+  - name: Download NAND template
+    shell: bash
+    env:
+      NAND_TEMPLATE_URL: ${{ secrets.NAND_TEMPLATE_URL }}
+    run: |
+      set -euo pipefail
+
+      if [[ -z "${NAND_TEMPLATE_URL:-}" ]]; then
+        echo "NAND_TEMPLATE_URL secret is not configured."
+        echo
+        echo "This workflow requires the 4.2.1-compatible nand_n72ap.zip"
+        echo "or an equivalent page-directory archive."
+        exit 1
+      fi
+
+      curl -L --fail --retry 5 --retry-all-errors \
+        "$NAND_TEMPLATE_URL" \
+        -o nand_n72ap.zip
+
+      unzip -q nand_n72ap.zip -d template-extract
+
+      if [[ -d template-extract/nand ]]; then
+        mv template-extract/nand nand-template
+      else
+        echo "ERROR: archive does not contain a top-level nand/ directory"
+        find template-extract -maxdepth 2 -type d -print
+        exit 1
+      fi
+
+      for cs in 0 1 2 3; do
+        test -d "nand-template/cs${cs}"
+      done
+
+      echo "Template:"
+      for cs in 0 1 2 3; do
+        count="$(find "nand-template/cs${cs}" -maxdepth 1 -type f -name '*.page' | wc -l | tr -d ' ')"
+        echo "cs${cs}: ${count} pages"
+      done
+
+  - name: Validate NAND template
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 - <<'PY'
+      import os
+      import sys
+
+      root = "nand-template"
+
+      expected = {
+          "cs0": 32017,
+          "cs1": 32014,
+          "cs2": 32014,
+          "cs3": 32015,
+      }
+
+      total = 0
+
+      for cs, wanted in expected.items():
+          path = os.path.join(root, cs)
+          files = [
+              x for x in os.listdir(path)
+              if x.endswith(".page") and x[:-5].isdigit()
+          ]
+
+          print(f"{cs}: {len(files)} pages")
+
+          if len(files) != wanted:
+              print(
+                  f"ERROR: expected {wanted} pages in {cs}, "
+                  f"got {len(files)}"
+              )
+              sys.exit(1)
+
+          total += len(files)
+
+          sample = os.path.join(path, files[0])
+          size = os.path.getsize(sample)
+
+          if size != 4160:
+              print(
+                  f"ERROR: {sample} is {size} bytes, "
+                  "expected 4160"
+              )
+              sys.exit(1)
+
+      print(f"total: {total} pages")
+      print("template validation OK")
+      PY
+
+  - name: Build NAND
+    shell: bash
+    env:
+      BLOCKS: ${{ inputs.blocks }}
+    run: |
+      set -euo pipefail
+
+      rm -rf output-nand work-nand
+      mkdir -p output-nand
+
+      python3 imgtools/build_nand.py \
+        --rootfs "ipsw/038-0014-002.dmg" \
+        --kernelcache "ipsw/kernelcache.release.n72" \
+        --template "$PWD/nand-template" \
+        --out "$PWD/output-nand" \
+        --blocks "$BLOCKS" \
+        --workdir "$PWD/work-nand" \
+        --keep-work
+
+  - name: Validate generated NAND
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      for cs in 0 1 2 3; do
+        test -d "output-nand/cs${cs}"
+
+        count="$(find "output-nand/cs${cs}" \
+          -maxdepth 1 \
+          -type f \
+          -name '*.page' \
+          | wc -l \
+          | tr -d ' ')"
+
+        echo "output cs${cs}: ${count} pages"
+
+        if [[ "$count" -eq 0 ]]; then
+          echo "ERROR: cs${cs} is empty"
+          exit 1
+        fi
+      done
+
+      echo
+      echo "Sample page sizes:"
+      find output-nand \
+        -type f \
+        -name '*.page' \
+        -print0 |
+        xargs -0 -n1 stat -f '%N %z' |
+        head -20
+
+  - name: Pack NAND
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 imgtools/pack_nand.py \
+        output-nand \
+        nand_n72ap_4.2.1_8C148.itnand
+
+      ls -lh nand_n72ap_4.2.1_8C148.itnand
+
+  - name: Create ZIP
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      cd output-nand
+      zip -qr ../nand_n72ap_4.2.1_8C148.zip nand-placeholder 2>/dev/null || true
+      cd ..
+
+      rm -f nand_n72ap_4.2.1_8C148.zip
+
+      zip -qr \
+        nand_n72ap_4.2.1_8C148.zip \
+        output-nand
+
+      ls -lh nand_n72ap_4.2.1_8C148.zip
+
+  - name: Upload NAND page directory
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-pages
+      path: output-nand/
+      if-no-files-found: error
+      retention-days: 7
+
+  - name: Upload packed NAND
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-packed
+      path: nand_n72ap_4.2.1_8C148.itnand
+      if-no-files-found: error
+      retention-days: 7
+
+  - name: Upload ZIP
+    uses: actions/upload-artifact@v4
+    with:
+      name: nand-n72ap-4.2.1-8C148-zip
+      path: nand_n72ap_4.2.1_8C148.zip
+      if-no-files-found: error
+      retention-days: 7
