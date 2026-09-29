@@ -39,7 +39,7 @@ jobs:
             --output ipsw \
             --confirm
 
-          IPSW="$(find ipsw -maxdepth 1 -type f -name '*.ipsw' | head -n 1)"
+          IPSW="$(find ipsw -maxdepth 1 -type f -name '*.ipsw' -print -quit)"
 
           if [[ -z "$IPSW" ]]; then
             echo "ERROR: IPSW was not downloaded"
@@ -84,48 +84,61 @@ jobs:
           echo "Kernelcache:"
           ls -lh extracted/kernelcache.release.n72
 
-      - name: Prepare imgtools
+      - name: Locate and prepare imgtools
         shell: bash
         run: |
           set -uo pipefail
 
-          echo "Python:"
-          python3 --version
+          echo "Procurando build_nand.py..."
 
-          echo
-          echo "Checking files..."
+          BUILD_NAND="$(find . -type f -name 'build_nand.py' -print -quit)"
+
+          if [[ -z "$BUILD_NAND" ]]; then
+            echo "ERROR: build_nand.py não encontrado no repositório."
+            echo
+            echo "Arquivos Python encontrados:"
+            find . -type f -name '*.py' -print | head -100
+            exit 1
+          fi
+
+          IMGTOOLS_DIR="$(dirname "$BUILD_NAND")"
+
+          echo "imgtools encontrado em:"
+          echo "$IMGTOOLS_DIR"
+
+          echo "IMGTOOLS_DIR=$IMGTOOLS_DIR" >> "$GITHUB_ENV"
 
           for f in \
-            imgtools/build_nand.py \
-            imgtools/hfsvol.py \
-            imgtools/nandblob.py \
-            imgtools/ftlmap.py \
-            imgtools/pack_nand.py
+            build_nand.py \
+            hfsvol.py \
+            nandblob.py \
+            ftlmap.py \
+            pack_nand.py
           do
-            if [[ ! -f "$f" ]]; then
-              echo "MISSING: $f"
+            if [[ ! -f "$IMGTOOLS_DIR/$f" ]]; then
+              echo "MISSING: $IMGTOOLS_DIR/$f"
               exit 1
             fi
 
-            echo "OK: $f"
+            echo "OK: $IMGTOOLS_DIR/$f"
           done
 
           echo
-          echo "Compiling files..."
+          echo "Compilando..."
 
           FAILED=0
 
           for f in \
-            imgtools/build_nand.py \
-            imgtools/hfsvol.py \
-            imgtools/nandblob.py \
-            imgtools/ftlmap.py \
-            imgtools/pack_nand.py
+            build_nand.py \
+            hfsvol.py \
+            nandblob.py \
+            ftlmap.py \
+            pack_nand.py
           do
             echo
-            echo "===== $f ====="
+            echo "===== $IMGTOOLS_DIR/$f ====="
 
-            if python3 -m py_compile "$f"; then
+            if python3 -m py_compile "$IMGTOOLS_DIR/$f"; then
               echo "COMPILE OK: $f"
             else
               echo "COMPILE FAILED: $f"
@@ -133,14 +146,11 @@ jobs:
             fi
           done
 
-          echo
-
           if [[ "$FAILED" -ne 0 ]]; then
-            echo "At least one imgtool failed to compile."
             exit 1
           fi
 
-          echo "All imgtools compiled successfully."
+          echo "Todos os imgtools foram encontrados e compilados."
 
       - name: Download NAND template
         shell: bash
@@ -157,7 +167,10 @@ jobs:
           rm -rf template-extract nand-template
           mkdir -p template-extract
 
-          curl -L --fail --retry 5 --retry-all-errors \
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-all-errors \
             "$NAND_TEMPLATE_URL" \
             -o nand_n72ap.zip
 
@@ -174,6 +187,8 @@ jobs:
           for cs in 0 1 2 3; do
             test -d "nand-template/cs${cs}"
           done
+
+          echo "NAND template encontrado."
 
       - name: Validate NAND template
         shell: bash
@@ -214,12 +229,17 @@ jobs:
 
               total += len(files)
 
-              sample = os.path.join(path, files[0])
+              if not files:
+                  print(f"ERROR: {cs} está vazio")
+                  sys.exit(1)
 
-              if os.path.getsize(sample) != 4160:
+              sample = os.path.join(path, files[0])
+              size = os.path.getsize(sample)
+
+              if size != 4160:
                   print(
                       f"ERROR: {sample}: "
-                      f"{os.path.getsize(sample)} bytes, expected 4160"
+                      f"{size} bytes, expected 4160"
                   )
                   sys.exit(1)
 
@@ -236,7 +256,7 @@ jobs:
 
           rm -rf output-nand work-nand
 
-          python3 imgtools/build_nand.py \
+          python3 "$IMGTOOLS_DIR/build_nand.py" \
             --rootfs "extracted/038-0014-002.dmg" \
             --kernelcache "extracted/kernelcache.release.n72" \
             --template "$PWD/nand-template" \
@@ -302,7 +322,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          python3 imgtools/pack_nand.py \
+          python3 "$IMGTOOLS_DIR/pack_nand.py" \
             output-nand \
             nand_n72ap_4.2.1_8C148.itnand
 
@@ -319,7 +339,9 @@ jobs:
 
           (
             cd output-nand
-            zip -qr ../nand_n72ap_4.2.1_8C148.zip .
+            zip -qr \
+              ../nand_n72ap_4.2.1_8C148.zip \
+              .
           )
 
           test -f nand_n72ap_4.2.1_8C148.zip
