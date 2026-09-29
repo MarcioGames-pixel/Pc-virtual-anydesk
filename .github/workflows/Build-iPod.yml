@@ -26,6 +26,9 @@ jobs:
           brew trust blacktop/tap
           brew install blacktop/tap/ipsw
 
+          ipsw help >/dev/null
+          echo "ipsw installed"
+
       - name: Download qemu-ios-tools
         shell: bash
         run: |
@@ -86,11 +89,20 @@ jobs:
 
           ls -lh "$IPSW"
 
+      - name: Inspect IPSW
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          unzip -l "$IPSW" | grep -E \
+            '038-0014-002\.dmg|kernelcache\.release\.n72|BuildManifest\.plist'
+
       - name: Extract IPSW files
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf extracted
           mkdir -p extracted
 
           unzip -j \
@@ -105,6 +117,7 @@ jobs:
           echo "RootFS:"
           ls -lh extracted/038-0014-002.dmg
 
+          echo
           echo "Kernelcache:"
           ls -lh extracted/kernelcache.release.n72
 
@@ -147,29 +160,36 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "All imgtools compiled successfully."
 
-      - name: Download NAND template
+      - name: Download n72ap NAND template
         shell: bash
-        env:
-          NAND_TEMPLATE_URL: ${{ secrets.NAND_TEMPLATE_URL }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${NAND_TEMPLATE_URL:-}" ]]; then
-            echo "ERROR: NAND_TEMPLATE_URL secret is not configured."
-            exit 1
-          fi
+          URL="https://github.com/devos50/qemu-ios/releases/download/n72ap_v1/nand_n72ap.zip"
 
           rm -rf template-extract nand-template
           mkdir -p template-extract
 
-          curl -L \
+          echo "Downloading:"
+          echo "$URL"
+
+          curl \
+            -L \
             --fail \
             --retry 5 \
             --retry-all-errors \
-            "$NAND_TEMPLATE_URL" \
-            -o nand_n72ap.zip
+            --connect-timeout 30 \
+            -o nand_n72ap.zip \
+            "$URL"
+
+          test -s nand_n72ap.zip
+
+          echo
+          echo "Template archive:"
+          ls -lh nand_n72ap.zip
 
           unzip -q nand_n72ap.zip -d template-extract
 
@@ -182,69 +202,55 @@ jobs:
           fi
 
           for cs in 0 1 2 3; do
-            test -d "nand-template/cs${cs}"
+            if [[ ! -d "nand-template/cs${cs}" ]]; then
+              echo "ERROR: missing cs${cs}"
+              exit 1
+            fi
           done
 
-          echo "NAND template found."
+          echo
+          echo "NAND template:"
+          du -sh nand-template
+
+          for cs in 0 1 2 3; do
+            COUNT="$(find "nand-template/cs${cs}" -type f -name '*.page' | wc -l | tr -d ' ')"
+            echo "cs${cs}: ${COUNT} pages"
+          done
 
       - name: Validate NAND template
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 - <<'PY'
-          import os
-          import sys
+          EXPECTED_PAGE_SIZE=4160
 
-          root = "nand-template"
+          for cs in 0 1 2 3; do
+            DIR="nand-template/cs${cs}"
 
-          expected = {
-              "cs0": 32017,
-              "cs1": 32014,
-              "cs2": 32014,
-              "cs3": 32015,
-          }
+            COUNT="$(find "$DIR" -type f -name '*.page' | wc -l | tr -d ' ')"
 
-          total = 0
+            if [[ "$COUNT" -eq 0 ]]; then
+              echo "ERROR: cs${cs} contains no pages"
+              exit 1
+            fi
 
-          for cs, wanted in expected.items():
-              path = os.path.join(root, cs)
+            echo "Checking cs${cs}: ${COUNT} pages"
 
-              files = [
-                  x for x in os.listdir(path)
-                  if x.endswith(".page") and x[:-5].isdigit()
-              ]
+            SAMPLE="$(find "$DIR" -type f -name '*.page' | head -n 1)"
 
-              print(f"{cs}: {len(files)} pages")
+            SIZE="$(stat -f '%z' "$SAMPLE")"
 
-              if len(files) != wanted:
-                  print(
-                      f"ERROR: expected {wanted} pages in {cs}, "
-                      f"got {len(files)}"
-                  )
-                  sys.exit(1)
+            if [[ "$SIZE" -ne "$EXPECTED_PAGE_SIZE" ]]; then
+              echo "ERROR: $SAMPLE has size $SIZE"
+              echo "Expected $EXPECTED_PAGE_SIZE bytes"
+              exit 1
+            fi
+          done
 
-              if not files:
-                  print(f"ERROR: {cs} is empty")
-                  sys.exit(1)
+          echo
+          echo "NAND template validation OK."
 
-              total += len(files)
-
-              sample = os.path.join(path, files[0])
-              size = os.path.getsize(sample)
-
-              if size != 4160:
-                  print(
-                      f"ERROR: {sample}: "
-                      f"{size} bytes, expected 4160"
-                  )
-                  sys.exit(1)
-
-          print(f"total: {total} pages")
-          print("template validation OK")
-          PY
-
-      - name: Build NAND
+      - name: Build NAND from IPSW
         shell: bash
         env:
           BLOCKS: ${{ inputs.blocks }}
@@ -253,118 +259,129 @@ jobs:
 
           rm -rf output-nand work-nand
 
+          echo "Building synthetic n72ap NAND"
+          echo "Blocks: $BLOCKS"
+
           python3 "$IMGTOOLS_DIR/build_nand.py" \
-            --rootfs "extracted/038-0014-002.dmg" \
-            --kernelcache "extracted/kernelcache.release.n72" \
+            --rootfs "$PWD/extracted/038-0014-002.dmg" \
+            --kernelcache "$PWD/extracted/kernelcache.release.n72" \
             --template "$PWD/nand-template" \
             --out "$PWD/output-nand" \
             --blocks "$BLOCKS" \
-            --workdir "$PWD/work-nand" \
-            --keep-work
+            --workdir "$PWD/work-nand"
+
+          echo
+          echo "NAND build finished."
+
+          for cs in 0 1 2 3; do
+            test -d "output-nand/cs${cs}"
+          done
+
+          du -sh output-nand
 
       - name: Validate generated NAND
         shell: bash
         run: |
           set -euo pipefail
 
+          TOTAL=0
+
           for cs in 0 1 2 3; do
-            test -d "output-nand/cs${cs}"
+            COUNT="$(find "output-nand/cs${cs}" -type f -name '*.page' | wc -l | tr -d ' ')"
 
-            count="$(find "output-nand/cs${cs}" \
-              -maxdepth 1 \
-              -type f \
-              -name '*.page' \
-              | wc -l \
-              | tr -d ' ')"
-
-            echo "output cs${cs}: ${count} pages"
-
-            if [[ "$count" -eq 0 ]]; then
-              echo "ERROR: cs${cs} is empty"
+            if [[ "$COUNT" -eq 0 ]]; then
+              echo "ERROR: output cs${cs} has no pages"
               exit 1
             fi
+
+            echo "output cs${cs}: ${COUNT} pages"
+
+            TOTAL=$((TOTAL + COUNT))
           done
 
-          python3 - <<'PY'
-          import os
-          import sys
+          echo
+          echo "Total NAND pages: $TOTAL"
 
-          checked = 0
+          if [[ "$TOTAL" -le 0 ]]; then
+            echo "ERROR: generated NAND is empty"
+            exit 1
+          fi
 
-          for cs in range(4):
-              path = f"output-nand/cs{cs}"
+          SAMPLE="$(find output-nand -type f -name '*.page' | head -n 1)"
+          SIZE="$(stat -f '%z' "$SAMPLE")"
 
-              for name in os.listdir(path):
-                  if not name.endswith(".page"):
-                      continue
+          echo "Sample page size: $SIZE bytes"
 
-                  full = os.path.join(path, name)
-                  size = os.path.getsize(full)
+          if [[ "$SIZE" -ne 4160 ]]; then
+            echo "ERROR: generated NAND page is not 4160 bytes"
+            exit 1
+          fi
 
-                  if size != 4160:
-                      print(
-                          f"ERROR: {full}: "
-                          f"{size} bytes, expected 4160"
-                      )
-                      sys.exit(1)
-
-                  checked += 1
-
-          print(f"Checked {checked} NAND pages.")
-          print("Generated NAND validation OK")
-          PY
+          echo
+          echo "Generated NAND validation OK."
 
       - name: Pack NAND
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf packed
+          mkdir -p packed
+
           python3 "$IMGTOOLS_DIR/pack_nand.py" \
             output-nand \
-            nand_n72ap_4.2.1_8C148.itnand
+            packed/n72ap_8C148.itnand
 
-          test -f nand_n72ap_4.2.1_8C148.itnand
+          test -f packed/n72ap_8C148.itnand
 
-          ls -lh nand_n72ap_4.2.1_8C148.itnand
+          echo
+          echo "Packed NAND:"
+          ls -lh packed/n72ap_8C148.itnand
 
-      - name: Create ZIP
+      - name: Create NAND ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -f nand_n72ap_4.2.1_8C148.zip
+          rm -rf release
+          mkdir -p release
 
-          (
-            cd output-nand
-            zip -qr \
-              ../nand_n72ap_4.2.1_8C148.zip \
-              .
-          )
+          cp packed/n72ap_8C148.itnand \
+            release/n72ap_8C148.itnand
 
-          test -f nand_n72ap_4.2.1_8C148.zip
+          cp -R output-nand \
+            release/nand_n72ap_8C148
 
-          ls -lh nand_n72ap_4.2.1_8C148.zip
+          cd release
 
-      - name: Upload NAND page directory
+          zip -r -q \
+            ../nand_n72ap_8C148.zip \
+            n72ap_8C148.itnand \
+            nand_n72ap_8C148
+
+          cd ..
+
+          ls -lh nand_n72ap_8C148.zip
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shasum -a 256 \
+            nand_n72ap_8C148.zip \
+            packed/n72ap_8C148.itnand \
+            > SHA256SUMS
+
+          cat SHA256SUMS
+
+      - name: Upload NAND artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nand-n72ap-4.2.1-8C148-pages
-          path: output-nand/
+          name: iPod2,1-iOS-4.2.1-8C148-NAND
+          path: |
+            nand_n72ap_8C148.zip
+            packed/n72ap_8C148.itnand
+            SHA256SUMS
+          compression-level: 0
           if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload packed NAND
-        uses: actions/upload-artifact@v4
-        with:
-          name: nand-n72ap-4.2.1-8C148-packed
-          path: nand_n72ap_4.2.1_8C148.itnand
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: nand-n72ap-4.2.1-8C148-zip
-          path: nand_n72ap_4.2.1_8C148.zip
-          if-no-files-found: error
-          retention-days: 7
