@@ -26,6 +26,30 @@ jobs:
           brew trust blacktop/tap
           brew install blacktop/tap/ipsw
 
+      - name: Download qemu-ios-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf qemu-ios-tools
+
+          git clone \
+            --depth 1 \
+            --branch ipod_touch_2g \
+            https://github.com/samhenrigold/qemu-ios.git \
+            qemu-ios-tools
+
+          test -f qemu-ios-tools/imgtools/build_nand.py
+          test -f qemu-ios-tools/imgtools/hfsvol.py
+          test -f qemu-ios-tools/imgtools/nandblob.py
+          test -f qemu-ios-tools/imgtools/ftlmap.py
+          test -f qemu-ios-tools/imgtools/pack_nand.py
+
+          echo "IMGTOOLS_DIR=$PWD/qemu-ios-tools/imgtools" >> "$GITHUB_ENV"
+
+          echo "imgtools:"
+          ls -lh qemu-ios-tools/imgtools
+
       - name: Download iOS 4.2.1 IPSW
         shell: bash
         run: |
@@ -84,47 +108,12 @@ jobs:
           echo "Kernelcache:"
           ls -lh extracted/kernelcache.release.n72
 
-      - name: Locate and prepare imgtools
+      - name: Prepare imgtools
         shell: bash
         run: |
           set -uo pipefail
 
-          echo "Procurando build_nand.py..."
-
-          BUILD_NAND="$(find . -type f -name 'build_nand.py' -print -quit)"
-
-          if [[ -z "$BUILD_NAND" ]]; then
-            echo "ERROR: build_nand.py não encontrado no repositório."
-            echo
-            echo "Arquivos Python encontrados:"
-            find . -type f -name '*.py' -print | head -100
-            exit 1
-          fi
-
-          IMGTOOLS_DIR="$(dirname "$BUILD_NAND")"
-
-          echo "imgtools encontrado em:"
-          echo "$IMGTOOLS_DIR"
-
-          echo "IMGTOOLS_DIR=$IMGTOOLS_DIR" >> "$GITHUB_ENV"
-
-          for f in \
-            build_nand.py \
-            hfsvol.py \
-            nandblob.py \
-            ftlmap.py \
-            pack_nand.py
-          do
-            if [[ ! -f "$IMGTOOLS_DIR/$f" ]]; then
-              echo "MISSING: $IMGTOOLS_DIR/$f"
-              exit 1
-            fi
-
-            echo "OK: $IMGTOOLS_DIR/$f"
-          done
-
-          echo
-          echo "Compilando..."
+          python3 --version
 
           FAILED=0
 
@@ -135,10 +124,18 @@ jobs:
             ftlmap.py \
             pack_nand.py
           do
-            echo
-            echo "===== $IMGTOOLS_DIR/$f ====="
+            FILE="$IMGTOOLS_DIR/$f"
 
-            if python3 -m py_compile "$IMGTOOLS_DIR/$f"; then
+            echo
+            echo "===== $FILE ====="
+
+            if [[ ! -f "$FILE" ]]; then
+              echo "MISSING: $FILE"
+              FAILED=1
+              continue
+            fi
+
+            if python3 -m py_compile "$FILE"; then
               echo "COMPILE OK: $f"
             else
               echo "COMPILE FAILED: $f"
@@ -150,7 +147,7 @@ jobs:
             exit 1
           fi
 
-          echo "Todos os imgtools foram encontrados e compilados."
+          echo "All imgtools compiled successfully."
 
       - name: Download NAND template
         shell: bash
@@ -188,7 +185,7 @@ jobs:
             test -d "nand-template/cs${cs}"
           done
 
-          echo "NAND template encontrado."
+          echo "NAND template found."
 
       - name: Validate NAND template
         shell: bash
@@ -227,11 +224,11 @@ jobs:
                   )
                   sys.exit(1)
 
-              total += len(files)
-
               if not files:
-                  print(f"ERROR: {cs} está vazio")
+                  print(f"ERROR: {cs} is empty")
                   sys.exit(1)
+
+              total += len(files)
 
               sample = os.path.join(path, files[0])
               size = os.path.getsize(sample)
