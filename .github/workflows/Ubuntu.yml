@@ -1,0 +1,81 @@
+name: Wine + noVNC + Bore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  wine-desktop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Install packages
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y \
+            wine64 \
+            wine32 \
+            xfce4 \
+            xfce4-goodies \
+            tigervnc-standalone-server \
+            novnc \
+            websockify \
+            wget \
+            curl \
+            unzip
+
+      - name: Install Bore
+        run: |
+          wget -O bore.tar.gz \
+            https://github.com/ekzhang/bore/releases/latest/download/bore-linux-x86_64.tar.gz
+
+          tar -xzf bore.tar.gz
+          chmod +x bore
+          sudo mv bore /usr/local/bin/bore
+
+          bore --version
+
+      - name: Configure VNC
+        run: |
+          mkdir -p ~/.vnc
+
+          cat > ~/.vnc/xstartup <<'EOF'
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          exec startxfce4
+          EOF
+
+          chmod +x ~/.vnc/xstartup
+
+          printf '123456\n123456\n\n' | vncpasswd
+
+      - name: Start VNC
+        run: |
+          vncserver :1 \
+            -geometry 1280x720 \
+            -depth 24 \
+            -localhost no
+
+          sleep 3
+
+          echo "VNC:"
+          ss -lntp | grep 5901 || true
+
+      - name: Start noVNC
+        run: |
+          websockify \
+            --web=/usr/share/novnc \
+            6080 \
+            localhost:5901 \
+            > novnc.log 2>&1 &
+
+          sleep 5
+
+          echo "noVNC:"
+          ss -lntp | grep 6080 || true
+
+      - name: Start Bore
+        run: |
+          bore local 6080 --to bore.pub --port 6080
