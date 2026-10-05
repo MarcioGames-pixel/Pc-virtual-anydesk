@@ -7,45 +7,95 @@ jobs:
   build:
     name: Start Building...
     runs-on: windows-latest
-    timeout-minutes: 10080  # Máximo de 7 dias para evitar tempo de execução excessivo
+    timeout-minutes: 10080
 
     steps:
       - name: Downloading & Installing Essentials
+        shell: powershell
         run: |
-          # Baixa o arquivo .bat para instalar componentes essenciais
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarcioGames-pixel/Pc-virtual-anydesk/refs/heads/main/Downloads.bat" -OutFile "Downloads.bat"
-          # Executa o script .bat para instalar os componentes
           cmd /c Downloads.bat
-
-      - name: Log In To AnyDesk
-        run: |
-          # Verifica se o arquivo start.bat existe antes de executar
-          if (Test-Path "start.bat") {
-            cmd /c start.bat
-          } else {
-            Write-Host "Arquivo start.bat não encontrado. Verifique a configuração."
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
           }
 
-      - name: Monitor and Restart AnyDesk if Needed
+      - name: Start AnyDesk
+        shell: powershell
         run: |
-          # Monitora a conexão do AnyDesk e reinicia se necessário
-          while ($true) {
+          $paths = @(
+            "C:\Program Files (x86)\AnyDesk\AnyDesk.exe",
+            "C:\Program Files\AnyDesk\AnyDesk.exe",
+            "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
+          )
+
+          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $anydesk) {
+            $anydesk = (Get-Command AnyDesk.exe -ErrorAction SilentlyContinue).Source
+          }
+
+          if (-not $anydesk) {
+            Write-Error "AnyDesk.exe não foi encontrado."
+            exit 1
+          }
+
+          Write-Host "AnyDesk encontrado em: $anydesk"
+
+          Start-Process -FilePath $anydesk
+
+          Start-Sleep -Seconds 10
+
+          $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+
+          if (-not $process) {
+            Write-Error "AnyDesk não iniciou."
+            exit 1
+          }
+
+          Write-Host "AnyDesk está executando."
+
+      - name: Monitor AnyDesk
+        shell: powershell
+        run: |
+          $paths = @(
+            "C:\Program Files (x86)\AnyDesk\AnyDesk.exe",
+            "C:\Program Files\AnyDesk\AnyDesk.exe",
+            "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
+          )
+
+          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $anydesk) {
+            $anydesk = (Get-Command AnyDesk.exe -ErrorAction SilentlyContinue).Source
+          }
+
+          if (-not $anydesk) {
+            Write-Error "AnyDesk.exe não foi encontrado."
+            exit 1
+          }
+
+          $end = (Get-Date).AddDays(7)
+
+          while ((Get-Date) -lt $end) {
             $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
-            if (-not $process) {
-              Write-Host "AnyDesk não está rodando, reiniciando..."
-              cmd /c start.bat
-            }
-            Start-Sleep -Seconds 300  # Verifica a cada 5 minutos
-          }
 
-      - name: Time Counter (Long Running Task)
-        run: |
-          # Configura para manter a máquina em execução
-          Start-Sleep -Seconds 604800  # 7 dias de execução contínua
+            if (-not $process) {
+              Write-Host "AnyDesk não está rodando. Reiniciando..."
+              Start-Process -FilePath $anydesk
+              Start-Sleep -Seconds 15
+            }
+
+            Write-Host "AnyDesk ativo: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+
+            Start-Sleep -Seconds 300
+          }
 
       - name: Clean Up Temporary Files
-        if: success()  # Executa esta etapa apenas se todas as etapas anteriores forem bem-sucedidas
+        if: always()
+        shell: powershell
         run: |
-          # Remove arquivos temporários ou logs gerados
-          Remove-Item Downloads.bat -Force
+          if (Test-Path "Downloads.bat") {
+            Remove-Item "Downloads.bat" -Force
+          }
+
           Write-Host "Limpeza completa."
