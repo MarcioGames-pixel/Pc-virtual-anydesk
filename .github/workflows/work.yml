@@ -15,11 +15,12 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarcioGames-pixel/Pc-virtual-anydesk/refs/heads/main/Downloads.bat" -OutFile "Downloads.bat"
           cmd /c Downloads.bat
+
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-      - name: Start AnyDesk
+      - name: Start AnyDesk and Get ID
         shell: powershell
         run: |
           $paths = @(
@@ -31,7 +32,11 @@ jobs:
           $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
           if (-not $anydesk) {
-            $anydesk = (Get-Command AnyDesk.exe -ErrorAction SilentlyContinue).Source
+            $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
+
+            if ($command) {
+              $anydesk = $command.Source
+            }
           }
 
           if (-not $anydesk) {
@@ -41,18 +46,31 @@ jobs:
 
           Write-Host "AnyDesk encontrado em: $anydesk"
 
-          Start-Process -FilePath $anydesk
+          $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
 
-          Start-Sleep -Seconds 10
+          if (-not $process) {
+            Start-Process -FilePath $anydesk
+            Start-Sleep -Seconds 15
+          }
 
           $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
 
           if (-not $process) {
-            Write-Error "AnyDesk não iniciou."
+            Write-Error "AnyDesk não está executando."
             exit 1
           }
 
           Write-Host "AnyDesk está executando."
+
+          $id = & $anydesk --get-id 2>$null
+
+          if ($id) {
+            Write-Host "========================================"
+            Write-Host "AnyDesk ID: $id"
+            Write-Host "========================================"
+          } else {
+            Write-Host "Não foi possível obter o ID pelo comando --get-id."
+          }
 
       - name: Monitor AnyDesk
         shell: powershell
@@ -66,7 +84,11 @@ jobs:
           $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
           if (-not $anydesk) {
-            $anydesk = (Get-Command AnyDesk.exe -ErrorAction SilentlyContinue).Source
+            $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
+
+            if ($command) {
+              $anydesk = $command.Source
+            }
           }
 
           if (-not $anydesk) {
@@ -81,8 +103,16 @@ jobs:
 
             if (-not $process) {
               Write-Host "AnyDesk não está rodando. Reiniciando..."
+
               Start-Process -FilePath $anydesk
+
               Start-Sleep -Seconds 15
+
+              $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+
+              if (-not $process) {
+                Write-Host "Não foi possível iniciar o AnyDesk."
+              }
             }
 
             Write-Host "AnyDesk ativo: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
