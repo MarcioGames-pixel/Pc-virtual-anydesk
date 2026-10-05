@@ -20,7 +20,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Start AnyDesk and Get ID
+      - name: Configure AnyDesk
         shell: powershell
         run: |
           $paths = @(
@@ -53,24 +53,51 @@ jobs:
             Start-Sleep -Seconds 15
           }
 
-          $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+          $password = "testwin1!"
 
-          if (-not $process) {
-            Write-Error "AnyDesk não está executando."
+          $password | & $anydesk --set-password
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Não foi possível configurar o acesso não supervisionado."
             exit 1
           }
 
-          Write-Host "AnyDesk está executando."
+          Write-Host "Acesso não supervisionado configurado."
+
+      - name: Get AnyDesk ID
+        shell: powershell
+        run: |
+          $paths = @(
+            "C:\Program Files (x86)\AnyDesk\AnyDesk.exe",
+            "C:\Program Files\AnyDesk\AnyDesk.exe",
+            "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
+          )
+
+          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $anydesk) {
+            $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
+
+            if ($command) {
+              $anydesk = $command.Source
+            }
+          }
+
+          if (-not $anydesk) {
+            Write-Error "AnyDesk.exe não foi encontrado."
+            exit 1
+          }
+
+          Start-Process -FilePath $anydesk
+
+          Start-Sleep -Seconds 15
 
           $id = & $anydesk --get-id 2>$null
 
-          if ($id) {
-            Write-Host "========================================"
-            Write-Host "AnyDesk ID: $id"
-            Write-Host "========================================"
-          } else {
-            Write-Host "Não foi possível obter o ID pelo comando --get-id."
-          }
+          Write-Host "========================================"
+          Write-Host "AnyDesk ID: $id"
+          Write-Host "========================================"
+          Write-Host "Acesso não supervisionado: configurado"
 
       - name: Monitor AnyDesk
         shell: powershell
@@ -107,12 +134,6 @@ jobs:
               Start-Process -FilePath $anydesk
 
               Start-Sleep -Seconds 15
-
-              $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
-
-              if (-not $process) {
-                Write-Host "Não foi possível iniciar o AnyDesk."
-              }
             }
 
             Write-Host "AnyDesk ativo: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
