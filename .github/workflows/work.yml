@@ -14,9 +14,11 @@ jobs:
         shell: powershell
         run: |
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarcioGames-pixel/Pc-virtual-anydesk/refs/heads/main/Downloads.bat" -OutFile "Downloads.bat"
+
           cmd /c Downloads.bat
 
           if ($LASTEXITCODE -ne 0) {
+            Write-Error "Downloads.bat terminou com erro."
             exit $LASTEXITCODE
           }
 
@@ -29,7 +31,9 @@ jobs:
             "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
           )
 
-          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $anydesk = $paths |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
 
           if (-not $anydesk) {
             $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
@@ -53,16 +57,32 @@ jobs:
             Start-Sleep -Seconds 15
           }
 
-          $password = "testwin1!"
+          $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
 
-          $password | & $anydesk --set-password
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Não foi possível configurar o acesso não supervisionado."
+          if (-not $process) {
+            Write-Error "AnyDesk não está executando."
             exit 1
           }
 
-          Write-Host "Acesso não supervisionado configurado."
+          $password = "testwin1!"
+
+          Write-Host "Configurando acesso não supervisionado..."
+
+          $result = cmd.exe /c "echo $password|`"$anydesk`" --set-password" 2>&1
+
+          Write-Host $result
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Não foi possível configurar a senha pelo perfil padrão."
+          } else {
+            Write-Host "Senha de acesso não supervisionado configurada."
+          }
+
+          Start-Sleep -Seconds 5
+
+          $status = & $anydesk --get-status 2>$null
+
+          Write-Host "Status AnyDesk: $status"
 
       - name: Get AnyDesk ID
         shell: powershell
@@ -73,7 +93,9 @@ jobs:
             "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
           )
 
-          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $anydesk = $paths |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
 
           if (-not $anydesk) {
             $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
@@ -88,16 +110,17 @@ jobs:
             exit 1
           }
 
-          Start-Process -FilePath $anydesk
-
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 5
 
           $id = & $anydesk --get-id 2>$null
 
           Write-Host "========================================"
           Write-Host "AnyDesk ID: $id"
           Write-Host "========================================"
-          Write-Host "Acesso não supervisionado: configurado"
+
+          if (-not $id) {
+            Write-Warning "O ID do AnyDesk não foi retornado."
+          }
 
       - name: Monitor AnyDesk
         shell: powershell
@@ -108,7 +131,9 @@ jobs:
             "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
           )
 
-          $anydesk = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $anydesk = $paths |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
 
           if (-not $anydesk) {
             $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
