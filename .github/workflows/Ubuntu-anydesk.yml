@@ -1,0 +1,79 @@
+name: Wine + AnyDesk
+
+on:
+  workflow_dispatch:
+
+jobs:
+  wine-desktop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Update Ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+
+      - name: Enable 32-bit
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+
+      - name: Install Wine + XFCE
+        run: |
+          sudo apt-get install -y \
+            wine \
+            wine32 \
+            wine64 \
+            xfce4 \
+            xfce4-goodies \
+            wget \
+            curl \
+            unzip \
+            p7zip-full
+
+          wine --version
+
+      - name: Install AnyDesk
+        run: |
+          wget -O anydesk.deb \
+            https://download.anydesk.com/linux/anydesk_amd64.deb
+
+          sudo apt-get install -y ./anydesk.deb
+
+          sudo systemctl enable anydesk
+          sudo systemctl start anydesk
+
+          sleep 5
+
+          anydesk --version
+          anydesk --get-id
+
+      - name: Configure VNC-style desktop session
+        run: |
+          mkdir -p "$HOME/.config/xfce4"
+
+          cat > "$HOME/start-xfce.sh" <<'EOF'
+          #!/bin/sh
+          export DISPLAY=:0
+          startxfce4
+          EOF
+
+          chmod +x "$HOME/start-xfce.sh"
+
+      - name: Start desktop
+        run: |
+          sudo systemctl restart anydesk
+
+          sleep 10
+
+          echo "=============================="
+          echo "AnyDesk ID:"
+          anydesk --get-id
+          echo "=============================="
+
+      - name: Keep runner alive for 5 hours
+        run: |
+          echo "AnyDesk está ativo."
+
+          sleep 18000
