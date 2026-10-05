@@ -72,55 +72,68 @@ jobs:
 
           Write-Host $result
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Não foi possível configurar a senha pelo perfil padrão."
-          } else {
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Senha de acesso não supervisionado configurada."
+          } else {
+            Write-Warning "Não foi possível configurar a senha."
           }
 
           Start-Sleep -Seconds 5
-
-          $status = & $anydesk --get-status 2>$null
-
-          Write-Host "Status AnyDesk: $status"
 
       - name: Get AnyDesk ID
         shell: powershell
         run: |
-          $paths = @(
-            "C:\Program Files (x86)\AnyDesk\AnyDesk.exe",
-            "C:\Program Files\AnyDesk\AnyDesk.exe",
-            "C:\ProgramData\chocolatey\lib\anydesk.install\tools\AnyDesk.exe"
+          $configPaths = @(
+            "$env:APPDATA\AnyDesk\service.conf",
+            "$env:APPDATA\AnyDesk\ad.trace",
+            "$env:PROGRAMDATA\AnyDesk\service.conf",
+            "$env:PROGRAMDATA\AnyDesk\system.conf"
           )
 
-          $anydesk = $paths |
-            Where-Object { Test-Path $_ } |
-            Select-Object -First 1
+          $found = $false
 
-          if (-not $anydesk) {
-            $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
+          foreach ($file in $configPaths) {
+            if (Test-Path $file) {
+              Write-Host "Verificando: $file"
 
-            if ($command) {
-              $anydesk = $command.Source
+              $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
+
+              if ($content -match "(?i)(?:ad\.anynet\.id|anynet\.id|client_id)\s*[=:]\s*([0-9]+)") {
+                $id = $Matches[1]
+
+                Write-Host "========================================"
+                Write-Host "AnyDesk ID: $id"
+                Write-Host "========================================"
+
+                $found = $true
+                break
+              }
             }
           }
 
-          if (-not $anydesk) {
-            Write-Error "AnyDesk.exe não foi encontrado."
+          if (-not $found) {
+            Write-Host "Arquivos de configuração encontrados:"
+            
+            foreach ($file in $configPaths) {
+              if (Test-Path $file) {
+                Write-Host $file
+              }
+            }
+
+            Write-Warning "O ID ainda não foi encontrado."
+          }
+
+      - name: Verify AnyDesk
+        shell: powershell
+        run: |
+          $process = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+
+          if (-not $process) {
+            Write-Error "AnyDesk não está executando."
             exit 1
           }
 
-          Start-Sleep -Seconds 5
-
-          $id = & $anydesk --get-id 2>$null
-
-          Write-Host "========================================"
-          Write-Host "AnyDesk ID: $id"
-          Write-Host "========================================"
-
-          if (-not $id) {
-            Write-Warning "O ID do AnyDesk não foi retornado."
-          }
+          Write-Host "AnyDesk está executando."
 
       - name: Monitor AnyDesk
         shell: powershell
@@ -134,14 +147,6 @@ jobs:
           $anydesk = $paths |
             Where-Object { Test-Path $_ } |
             Select-Object -First 1
-
-          if (-not $anydesk) {
-            $command = Get-Command AnyDesk.exe -ErrorAction SilentlyContinue
-
-            if ($command) {
-              $anydesk = $command.Source
-            }
-          }
 
           if (-not $anydesk) {
             Write-Error "AnyDesk.exe não foi encontrado."
