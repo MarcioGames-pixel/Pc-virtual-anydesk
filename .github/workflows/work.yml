@@ -13,7 +13,7 @@ jobs:
       - name: Downloading & Installing Essentials
         run: |
           # Baixa o arquivo .bat para instalar componentes essenciais
-          Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarcioGames-pixel/Pc-virtual-anydesk/refs/heads/main/Downloads.bat" -OutFile "Downloads.bat"
           # Executa o script .bat para instalar os componentes
           cmd /c Downloads.bat
 
