@@ -36,16 +36,18 @@ jobs:
 
       - name: Install AnyDesk
         run: |
-          wget -O anydesk.deb \
-            https://download.anydesk.com/linux/anydesk_amd64.deb
+          sudo apt-get install -y ca-certificates curl gnupg
 
-          sudo apt-get install -y ./anydesk.deb
+          curl -fsSL https://keys.anydesk.com/repos/DEB-GPG-KEY \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/anydesk.gpg
 
-          sudo systemctl enable anydesk
-          sudo systemctl start anydesk
+          echo "deb http://deb.anydesk.com all main" \
+            | sudo tee /etc/apt/sources.list.d/anydesk.list
 
-          sleep 5
+          sudo apt-get update
+          sudo apt-get install -y anydesk
 
+          echo "=== AnyDesk ==="
           anydesk --version
           anydesk --get-id
 
