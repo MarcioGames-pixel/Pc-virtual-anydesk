@@ -1,19 +1,23 @@
-name: Windows XP Gamer KVM
+
+name: Windows XP Gamer
 
 on:
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
-  vm:
+  windows-xp:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
+    env:
+      XP_VNC_PASSWORD: ${{ secrets.XP_VNC_PASSWORD }}
+      XP_ISO_URL: ${{ secrets.XP_ISO_URL }}
+
     steps:
-      - name: Install packages
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -21,69 +25,70 @@ jobs:
             qemu-system-x86 \
             qemu-utils \
             wget \
-            python3 \
+            curl \
             git \
-            curl
+            python3 \
+            unzip \
+            xz-utils \
+            build-essential \
+            pkg-config \
+            libssl-dev
 
-      - name: Check KVM
+      - name: Check virtualization
+        id: kvm
         run: |
-          if [ ! -e /dev/kvm ]; then
-            echo "KVM não está disponível neste runner."
-            exit 1
+          if [ -e /dev/kvm ]; then
+            echo "KVM available"
+            sudo chmod 666 /dev/kvm
+            echo "accel=kvm" >> "$GITHUB_OUTPUT"
+            echo "cpu=host" >> "$GITHUB_OUTPUT"
+          else
+            echo "KVM unavailable, using software emulation"
+            echo "accel=tcg" >> "$GITHUB_OUTPUT"
+            echo "cpu=qemu32" >> "$GITHUB_OUTPUT"
           fi
 
-          ls -l /dev/kvm
-
-      - name: KVM permissions
+      - name: Prepare workspace
         run: |
-          sudo chmod 666 /dev/kvm
-          ls -l /dev/kvm
-
-      - name: Download noVNC
-        run: |
-          git clone --depth 1 \
-            https://github.com/novnc/noVNC.git \
-            novnc
+          mkdir -p Shared
+          rm -f /tmp/qemu-monitor.sock
+          mkdir -p novnc
 
       - name: Download Windows XP ISO
         run: |
-          wget -O windows-xp.iso \
-            "https://archive.org/download/WinXPProSP3x86/en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso"
-
-      - name: Create QCOW2
-        run: |
-          qemu-img create \
-            -f qcow2 \
-            xp-gamer.qcow2 \
-            64G
-
-      - name: Create shared folder
-        run: |
-          mkdir -p Shared
-
-      - name: Start QEMU
-        run: |
-          VNC_PASSWORD='XPgamer1'
-
-          if [ ${#VNC_PASSWORD} -gt 8 ]; then
-            echo "ERRO: senha VNC deve ter no máximo 8 caracteres."
+          if [ -z "$XP_ISO_URL" ]; then
+            echo "Configure the XP_ISO_URL GitHub secret first."
             exit 1
           fi
 
-          nohup qemu-system-i386 \
-            -enable-kvm \
-            -machine pc,accel=kvm \
-            -cpu host \
+          curl -fL --retry 3 "$XP_ISO_URL" \
+            -o windows-xp.iso
+
+          test -s windows-xp.iso
+          ls -lh windows-xp.iso
+
+      - name: Create virtual disk
+        run: |
+          qemu-img create -f qcow2 xp-gamer.qcow2 64G
+
+      - name: Start Windows XP
+        run: |
+          ACCEL="${{ steps.kvm.outputs.accel }}"
+          CPU="${{ steps.kvm.outputs.cpu }}"
+
+          qemu-system-i386 \
+            -machine pc,accel="$ACCEL" \
+            -cpu "$CPU" \
             -smp 4,sockets=1,cores=4,threads=1 \
             -m 4096 \
-            -drive file=xp-gamer.qcow2,format=qcow2,if=ide,cache=writeback \
+            -drive file=xp-gamer.qcow2,format=qcow2,if=ide \
             -cdrom windows-xp.iso \
             -boot order=d \
             -vga std \
             -device AC97 \
             -device e1000,netdev=net0 \
             -netdev user,id=net0 \
-            -drive file=fat:rw:./Shared,format=raw,media=disk \
+            -drive file=fat:rw:./Shared,format=raw,if=virtio \
             -usb \
             -device usb-tablet \
             -rtc base=localtime \
@@ -94,60 +99,103 @@ jobs:
 
           echo $! > qemu.pid
 
-          sleep 15
-
-          echo "================ QEMU ================"
-          cat qemu.log || true
+          sleep 5
 
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "QEMU não está rodando."
+            cat qemu.log
             exit 1
           fi
 
-      - name: Set VNC password
+          echo "QEMU started."
+
+      - name: Configure and verify VNC password
         run: |
           python3 - <<'PY'
           import socket
+          import time
+          import os
 
-          password = "XPgamer1"
+          password = os.environ.get("XP_VNC_PASSWORD", "")
+          path = "/tmp/qemu-monitor.sock"
+
+          if not password or len(password) > 8:
+              raise SystemExit(
+                  "XP_VNC_PASSWORD must contain between 1 and 8 characters."
+              )
 
           sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-          sock.connect("/tmp/qemu-monitor.sock")
+          sock.settimeout(15)
 
-          sock.sendall(
-              ("set_password vnc " + password + "\n").encode()
-          )
+          for attempt in range(30):
+              try:
+                  sock.connect(path)
+                  break
+              except (FileNotFoundError, ConnectionRefusedError):
+                  time.sleep(1)
+          else:
+              raise SystemExit("QEMU monitor socket not available.")
 
-          response = sock.recv(4096).decode(errors="replace")
-          print(response)
+          def read_prompt():
+              data = b""
+              while b"(qemu)" not in data:
+                  chunk = sock.recv(4096)
+                  if not chunk:
+                      raise RuntimeError("QEMU monitor disconnected.")
+                  data += chunk
+              return data.decode("utf-8", errors="replace")
 
-          sock.close()
+          try:
+              print("Waiting for QEMU monitor prompt...")
+              print(read_prompt())
+
+              print("Setting VNC password...")
+              sock.sendall(
+                  ("set_password vnc " + password + "\n").encode()
+              )
+
+              response = read_prompt()
+              print("QEMU monitor response:")
+              print(response)
+
+              if "Error" in response or "Could not" in response:
+                  raise RuntimeError("QEMU rejected the VNC password.")
+
+              print("VNC password command accepted.")
+          finally:
+              sock.close()
           PY
 
-      - name: Verify VNC
+      - name: Verify VNC port
         run: |
-          echo "================ VNC ================"
+          python3 - <<'PY'
+          import socket
+          import time
 
-          if ss -lnt | grep -q ':5900'; then
-            echo "VNC está escutando na porta 5900."
-          else
-            echo "ERRO: VNC não está escutando."
-            exit 1
-          fi
+          for attempt in range(30):
+              try:
+                  s = socket.create_connection(
+                      ("127.0.0.1", 5900), timeout=3
+                  )
+                  print("VNC port 5900 is responding.")
+                  s.close()
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("VNC port 5900 did not open.")
+          PY
 
-      - name: Download Bore
+      - name: Install and start noVNC
         run: |
-          wget -q -O bore.tar.gz \
-            https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+          git clone --depth 1 \
+            https://github.com/novnc/noVNC.git novnc
 
-          tar -xzf bore.tar.gz
+          git clone --depth 1 \
+            https://github.com/novnc/websockify.git \
+            novnc/utils/websockify
 
-          chmod +x bore
+          chmod +x novnc/utils/novnc_proxy
 
-          ./bore --version
-
-      - name: Start noVNC
-        run: |
           nohup ./novnc/utils/novnc_proxy \
             --vnc 127.0.0.1:5900 \
             --listen 0.0.0.0:6080 \
@@ -157,96 +205,112 @@ jobs:
 
           sleep 5
 
-          echo "================ noVNC ================"
-          cat novnc.log || true
-
           if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
-            echo "noVNC não iniciou."
+            cat novnc.log
             exit 1
           fi
 
-      - name: Test noVNC
-        run: |
-          echo "================ HTTP noVNC ================"
+          echo "noVNC started on port 6080."
 
-          curl -I \
-            http://127.0.0.1:6080/vnc.html \
-            || true
-
-      - name: Start Bore
+      - name: Install Bore
         run: |
-          nohup ./bore \
-            local 6080 \
+          cargo --version || {
+            sudo apt-get install -y cargo
+          }
+
+          cargo install bore-cli --version 0.6.0
+
+      - name: Start Bore tunnel
+        run: |
+          nohup "$HOME/.cargo/bin/bore" local 6080 \
             --to bore.pub \
             > bore.log 2>&1 &
 
           echo $! > bore.pid
 
-          sleep 10
-
-          echo "================ Bore ================"
-          cat bore.log || true
-
-          echo "======================================="
-          echo "Windows XP"
-          echo "Senha VNC: XPgamer1"
-          echo "======================================="
-
-      - name: Check services
-        run: |
-          echo "================ PORTS ================"
-
-          ss -lntp | grep -E ':5900|:6080' || true
-
-          echo "================ PROCESSES ================"
-
-          ps aux | grep -E 'qemu|novnc|websockify|bore' \
-            | grep -v grep || true
-
-      - name: Keep VM running
-        run: |
-          echo "VM disponível."
-
-          while kill -0 "$(cat qemu.pid)" 2>/dev/null; do
-            sleep 30
+          for i in $(seq 1 30); do
+            if grep -q "listening at" bore.log; then
+              break
+            fi
+            sleep 2
           done
 
-          echo "QEMU terminou."
+          echo "Bore output:"
+          cat bore.log
 
-      - name: Show logs
+          if ! kill -0 "$(cat bore.pid)" 2>/dev/null; then
+            echo "Bore failed."
+            exit 1
+          fi
+
+      - name: Show connection information
+        run: |
+          echo "=================================="
+          echo "       WINDOWS XP GAMER"
+          echo "=================================="
+          echo "Open the Bore address shown below."
+          echo "Use the noVNC web client."
+          echo "VNC port: 5900"
+          echo "Web port: 6080"
+          echo "VNC password is configured in GitHub Secrets."
+          echo "=================================="
+          cat bore.log
+
+      - name: Keep Windows XP running
+        run: |
+          echo "Windows XP is running."
+          echo "The session will remain active for up to 6 hours."
+
+          for i in $(seq 1 21600); do
+            if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+              echo "QEMU stopped unexpectedly."
+              cat qemu.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Stop virtual machine
         if: always()
         run: |
-          echo "================ QEMU LOG ================"
-          cat qemu.log || true
+          if [ -f qemu.pid ]; then
+            kill "$(cat qemu.pid)" 2>/dev/null || true
+          fi
 
-          echo "================ noVNC LOG ================"
-          cat novnc.log || true
+          if [ -f novnc.pid ]; then
+            kill "$(cat novnc.pid)" 2>/dev/null || true
+          fi
 
-          echo "================ Bore LOG ================"
-          cat bore.log || true
+          if [ -f bore.pid ]; then
+            kill "$(cat bore.pid)" 2>/dev/null || true
+          fi
 
-      - name: Finalizar
-        if: always()
-        run: |
-          killall qemu-system-i386 || true
-          killall bore || true
-          killall websockify || true
-
-      - name: Compactar QCOW2
+      - name: Compress Windows XP disk
         if: always()
         run: |
           if [ -f xp-gamer.qcow2 ]; then
             qemu-img convert \
               -O qcow2 \
-              -c \
-              xp-gamer.qcow2 \
-              xp-installed.qcow2
+              -c xp-gamer.qcow2 \
+              xp-gamer-compressed.qcow2
           fi
 
-      - name: Artifact
+      - name: Upload Windows XP disk
+        if: always() && hashFiles('xp-gamer-compressed.qcow2') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-XP-Gamer-Disk
+          path: xp-gamer-compressed.qcow2
+          retention-days: 7
+
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-XP-QCOW2
-          path: xp-installed.qcow2
+          name: Windows-XP-Gamer-Logs
+          path: |
+            qemu.log
+            novnc.log
+            bore.log
+          if-no-files-found: ignore
           retention-days: 7
