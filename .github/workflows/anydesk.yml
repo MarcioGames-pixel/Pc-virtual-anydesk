@@ -244,6 +244,7 @@ jobs:
         run: |
           nohup "$HOME/.cargo/bin/bore" local 6080 \
             --to bore.pub \
+            --port 5000 \
             > bore.log 2>&1 &
 
           echo $! > bore.pid
