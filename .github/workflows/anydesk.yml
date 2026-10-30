@@ -20,8 +20,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
-            qemu-kvm \
             qemu-system-x86 \
             qemu-utils \
             wget \
@@ -32,14 +32,14 @@ jobs:
             xz-utils \
             build-essential \
             pkg-config \
-            libssl-dev
+            libssl-dev \
+            cargo
 
       - name: Check virtualization
         id: kvm
         run: |
-          if [ -e /dev/kvm ]; then
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
             echo "KVM available"
-            sudo chmod 666 /dev/kvm
             echo "accel=kvm" >> "$GITHUB_OUTPUT"
             echo "cpu=host" >> "$GITHUB_OUTPUT"
           else
@@ -52,24 +52,34 @@ jobs:
         run: |
           mkdir -p Shared
           rm -f /tmp/qemu-monitor.sock
-          mkdir -p novnc
+          echo "Workspace ready."
+          df -h .
+          free -h
 
-      - name: Download Windows XP ISO
+      - name: Download Windows XP SP3 ISO
         run: |
           if [ -z "$XP_ISO_URL" ]; then
-            echo "Configure the XP_ISO_URL GitHub secret first."
+            echo "ERROR: XP_ISO_URL secret is missing."
             exit 1
           fi
 
-          curl -fL --retry 3 "$XP_ISO_URL" \
+          curl -fL --retry 3 \
+            "$XP_ISO_URL" \
             -o windows-xp.iso
 
-          test -s windows-xp.iso
+          if [ ! -s windows-xp.iso ]; then
+            echo "Windows XP ISO download failed."
+            exit 1
+          fi
+
           ls -lh windows-xp.iso
 
       - name: Create virtual disk
         run: |
-          qemu-img create -f qcow2 xp-gamer.qcow2 64G
+          qemu-img create \
+            -f qcow2 \
+            xp-gamer.qcow2 \
+            64G
 
       - name: Start Windows XP
         run: |
@@ -79,7 +89,7 @@ jobs:
           qemu-system-i386 \
             -machine pc,accel="$ACCEL" \
             -cpu "$CPU" \
-            -smp 4,sockets=1,cores=4,threads=1 \
+            -smp 4 \
             -m 4096 \
             -drive file=xp-gamer.qcow2,format=qcow2,if=ide \
             -cdrom windows-xp.iso \
@@ -88,7 +98,7 @@ jobs:
             -device AC97 \
             -device e1000,netdev=net0 \
             -netdev user,id=net0 \
-            -drive file=fat:rw:./Shared,format=raw,if=virtio \
+            -drive file=fat:rw:./Shared,format=raw,if=ide \
             -usb \
             -device usb-tablet \
             -rtc base=localtime \
@@ -102,13 +112,14 @@ jobs:
           sleep 5
 
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "QEMU failed to start."
             cat qemu.log
             exit 1
           fi
 
-          echo "QEMU started."
+          echo "Windows XP QEMU started."
 
-      - name: Configure and verify VNC password
+      - name: Configure VNC password
         run: |
           python3 - <<'PY'
           import socket
@@ -120,7 +131,7 @@ jobs:
 
           if not password or len(password) > 8:
               raise SystemExit(
-                  "XP_VNC_PASSWORD must contain between 1 and 8 characters."
+                  "XP_VNC_PASSWORD must contain 1 to 8 characters."
               )
 
           sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -133,39 +144,46 @@ jobs:
               except (FileNotFoundError, ConnectionRefusedError):
                   time.sleep(1)
           else:
-              raise SystemExit("QEMU monitor socket not available.")
+              raise SystemExit("QEMU monitor socket unavailable.")
 
           def read_prompt():
               data = b""
+
               while b"(qemu)" not in data:
                   chunk = sock.recv(4096)
+
                   if not chunk:
                       raise RuntimeError("QEMU monitor disconnected.")
+
                   data += chunk
+
               return data.decode("utf-8", errors="replace")
 
           try:
-              print("Waiting for QEMU monitor prompt...")
+              print("Waiting for QEMU monitor...")
               print(read_prompt())
 
               print("Setting VNC password...")
+
               sock.sendall(
                   ("set_password vnc " + password + "\n").encode()
               )
 
               response = read_prompt()
-              print("QEMU monitor response:")
+
+              print("QEMU response:")
               print(response)
 
               if "Error" in response or "Could not" in response:
-                  raise RuntimeError("QEMU rejected the VNC password.")
+                  raise RuntimeError("QEMU rejected VNC password.")
 
               print("VNC password command accepted.")
+
           finally:
               sock.close()
           PY
 
-      - name: Verify VNC port
+      - name: Verify VNC
         run: |
           python3 - <<'PY'
           import socket
@@ -176,16 +194,19 @@ jobs:
                   s = socket.create_connection(
                       ("127.0.0.1", 5900), timeout=3
                   )
+
                   print("VNC port 5900 is responding.")
                   s.close()
                   break
+
               except OSError:
                   time.sleep(1)
+
           else:
-              raise SystemExit("VNC port 5900 did not open.")
+              raise SystemExit("VNC port 5900 unavailable.")
           PY
 
-      - name: Install and start noVNC
+      - name: Install noVNC
         run: |
           git clone --depth 1 \
             https://github.com/novnc/noVNC.git novnc
@@ -196,6 +217,8 @@ jobs:
 
           chmod +x novnc/utils/novnc_proxy
 
+      - name: Start noVNC
+        run: |
           nohup ./novnc/utils/novnc_proxy \
             --vnc 127.0.0.1:5900 \
             --listen 0.0.0.0:6080 \
@@ -206,18 +229,15 @@ jobs:
           sleep 5
 
           if ! kill -0 "$(cat novnc.pid)" 2>/dev/null; then
+            echo "noVNC failed."
             cat novnc.log
             exit 1
           fi
 
-          echo "noVNC started on port 6080."
+          echo "noVNC running on port 6080."
 
       - name: Install Bore
         run: |
-          cargo --version || {
-            sudo apt-get install -y cargo
-          }
-
           cargo install bore-cli --version 0.6.0
 
       - name: Start Bore tunnel
@@ -232,6 +252,7 @@ jobs:
             if grep -q "listening at" bore.log; then
               break
             fi
+
             sleep 2
           done
 
@@ -245,44 +266,67 @@ jobs:
 
       - name: Show connection information
         run: |
-          echo "=================================="
+          echo "================================"
           echo "       WINDOWS XP GAMER"
-          echo "=================================="
-          echo "Open the Bore address shown below."
-          echo "Use the noVNC web client."
-          echo "VNC port: 5900"
-          echo "Web port: 6080"
-          echo "VNC password is configured in GitHub Secrets."
-          echo "=================================="
+          echo "================================"
+          echo "VNC: 127.0.0.1:5900"
+          echo "noVNC: port 6080"
+          echo "Password: configured in GitHub Secrets"
+          echo "================================"
+
           cat bore.log
 
       - name: Keep Windows XP running
         run: |
-          echo "Windows XP is running."
-          echo "The session will remain active for up to 6 hours."
+          echo "Windows XP session started."
 
-          for i in $(seq 1 21600); do
+          for i in $(seq 1 21000); do
             if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
               echo "QEMU stopped unexpectedly."
               cat qemu.log
               exit 1
             fi
+
             sleep 1
           done
 
       - name: Stop virtual machine
         if: always()
         run: |
-          if [ -f qemu.pid ]; then
-            kill "$(cat qemu.pid)" 2>/dev/null || true
+          for file in qemu.pid novnc.pid bore.pid; do
+            if [ -f "$file" ]; then
+              kill "$(cat "$file")" 2>/dev/null || true
+            fi
+          done
+
+      - name: Diagnostic information
+        if: always()
+        run: |
+          echo "===== SYSTEM ====="
+          uname -a
+
+          echo "===== FILES ====="
+          ls -lah
+
+          echo "===== QEMU LOG ====="
+          if [ -f qemu.log ]; then
+            cat qemu.log
+          else
+            echo "qemu.log not created"
           fi
 
-          if [ -f novnc.pid ]; then
-            kill "$(cat novnc.pid)" 2>/dev/null || true
+          echo "===== NOVNC LOG ====="
+          if [ -f novnc.log ]; then
+            cat novnc.log
+          else
+            echo "novnc.log not created"
           fi
 
-          if [ -f bore.pid ]; then
-            kill "$(cat bore.pid)" 2>/dev/null || true
+          echo "===== BORE LOG ====="
+          if [ -f bore.log ]; then
+            cat bore.log
+          else
+            echo "bore.log not created"
           fi
 
       - name: Compress Windows XP disk
